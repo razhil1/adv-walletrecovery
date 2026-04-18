@@ -82,6 +82,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { motion, AnimatePresence } from 'framer-motion'
+import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts'
 import {
   Dialog,
   DialogContent,
@@ -271,6 +272,15 @@ const BLOCKCHAIN_CONFIG: Record<
     ],
   },
 }
+
+// ─── Wallet Presets ─────────────────────────────────────────────────────────
+
+const WALLET_PRESETS: { name: string; icon: string; blockchain: Blockchain; path: string }[] = [
+  { name: 'MetaMask', icon: '🦊', blockchain: 'eth', path: "m/44'/60'/0'/0/0" },
+  { name: 'Ledger', icon: '🔐', blockchain: 'btc', path: "m/84'/0'/0'/0/0" },
+  { name: 'Phantom', icon: '👻', blockchain: 'sol', path: "m/44'/501'/0'/0'" },
+  { name: 'Electrum', icon: '⚡', blockchain: 'btc', path: "m/44'/0'/0'/0/0" },
+]
 
 // ─── Autocomplete Component ──────────────────────────────────────────────────
 
@@ -570,6 +580,66 @@ export default function Home() {
   // Track previous path index for path switch notification
   const prevPathIndexRef = useRef<number | undefined>(undefined)
 
+  // ── Count-up animation for stats ──
+  const [countUpDone, setCountUpDone] = useState(false)
+  const [countUpValues, setCountUpValues] = useState({ blockchains: 0, words: 0, paths: 0 })
+  useEffect(() => {
+    const targets = { blockchains: 4, words: 2048, paths: 9 }
+    const duration = 1500
+    const steps = 60
+    const interval = duration / steps
+    let step = 0
+    const timer = setInterval(() => {
+      step++
+      const t = step / steps
+      // Ease-out cubic
+      const ease = 1 - Math.pow(1 - t, 3)
+      setCountUpValues({
+        blockchains: Math.round(targets.blockchains * ease),
+        words: Math.round(targets.words * ease),
+        paths: Math.round(targets.paths * ease),
+      })
+      if (step >= steps) {
+        clearInterval(timer)
+        setCountUpValues(targets)
+        setCountUpDone(true)
+      }
+    }, interval)
+    return () => clearInterval(timer)
+  }, [])
+
+  // ── Success sound via Web Audio API ──
+  const playSuccessSound = useCallback(() => {
+    try {
+      if (typeof window === 'undefined') return
+      const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      if (prefersReduced) return
+      const ctx = new AudioContext()
+      const osc1 = ctx.createOscillator()
+      const osc2 = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc1.type = 'sine'
+      osc2.type = 'sine'
+      osc1.frequency.setValueAtTime(523.25, ctx.currentTime) // C5
+      osc1.frequency.setValueAtTime(659.25, ctx.currentTime + 0.15) // E5
+      osc1.frequency.setValueAtTime(783.99, ctx.currentTime + 0.3) // G5
+      osc2.frequency.setValueAtTime(783.99, ctx.currentTime + 0.3) // G5
+      osc2.frequency.setValueAtTime(1046.5, ctx.currentTime + 0.45) // C6
+      gain.gain.setValueAtTime(0.15, ctx.currentTime)
+      gain.gain.setValueAtTime(0.12, ctx.currentTime + 0.3)
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.8)
+      osc1.connect(gain)
+      osc2.connect(gain)
+      gain.connect(ctx.destination)
+      osc1.start(ctx.currentTime)
+      osc2.start(ctx.currentTime + 0.3)
+      osc1.stop(ctx.currentTime + 0.6)
+      osc2.stop(ctx.currentTime + 0.8)
+    } catch {
+      // Web Audio not available, silently skip
+    }
+  }, [])
+
   // Results ref for auto-scroll
   const resultsRef = useRef<HTMLDivElement>(null)
 
@@ -687,10 +757,11 @@ export default function Home() {
     return total / 1000
   }, [unknownCount])
 
-  // ── Confetti and auto-scroll on success ──
+  // ── Confetti, sound, and auto-scroll on success ──
   useEffect(() => {
     if (isCompleted && jobStatus && jobStatus.result && jobStatus.result.length > 0) {
       setShowConfetti(true)
+      playSuccessSound()
       setTimeout(() => setShowConfetti(false), 3000)
       setTimeout(() => {
         resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -1438,9 +1509,9 @@ export default function Home() {
         >
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {[
-              { icon: <Globe className="h-3.5 w-3.5" />, label: 'Blockchains', value: '4', accent: 'text-emerald-400', bgAccent: 'bg-emerald-500/5 border-emerald-500/10' },
-              { icon: <Database className="h-3.5 w-3.5" />, label: 'BIP39 Words', value: '2,048', accent: 'text-cyan-400', bgAccent: 'bg-cyan-500/5 border-cyan-500/10' },
-              { icon: <Cpu className="h-3.5 w-3.5" />, label: 'Derivation Paths', value: '9', accent: 'text-teal-400', bgAccent: 'bg-teal-500/5 border-teal-500/10' },
+              { icon: <Globe className="h-3.5 w-3.5" />, label: 'Blockchains', value: countUpDone ? '4' : String(countUpValues.blockchains), accent: 'text-emerald-400', bgAccent: 'bg-emerald-500/5 border-emerald-500/10' },
+              { icon: <Database className="h-3.5 w-3.5" />, label: 'BIP39 Words', value: countUpDone ? '2,048' : formatNumber(countUpValues.words), accent: 'text-cyan-400', bgAccent: 'bg-cyan-500/5 border-cyan-500/10' },
+              { icon: <Cpu className="h-3.5 w-3.5" />, label: 'Derivation Paths', value: countUpDone ? '9' : String(countUpValues.paths), accent: 'text-teal-400', bgAccent: 'bg-teal-500/5 border-teal-500/10' },
               { icon: <Lock className="h-3.5 w-3.5" />, label: 'Data Stored', value: 'None', accent: 'text-amber-400', bgAccent: 'bg-amber-500/5 border-amber-500/10' },
             ].map((stat) => (
               <div key={stat.label} className={`flex items-center gap-2.5 ${stat.bgAccent} border rounded-lg px-3 py-2.5 transition-all duration-200 hover:scale-[1.02]`}>
@@ -1597,7 +1668,7 @@ export default function Home() {
                   </div>
                 </CardHeader>
                 <CardContent className="pt-0">
-                  {knownCount < (wordCount === 12 ? 8 : 16) && (
+                  {knownCount < (wordCount === 12 ? 8 : 16) && wordlist.length > 0 && (
                     <motion.p
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
@@ -1607,6 +1678,28 @@ export default function Home() {
                       Need at least {wordCount === 12 ? 8 : 16} known words to proceed ({knownCount}/{wordCount === 12 ? 8 : 16})
                     </motion.p>
                   )}
+                  {wordlist.length === 0 ? (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-center gap-2 py-2">
+                        <Loader2 className="h-4 w-4 text-emerald-400 animate-spin" />
+                        <span className="text-xs text-zinc-500">Loading wordlist...</span>
+                      </div>
+                      <div className={`grid gap-2 ${
+                        wordCount === 12
+                          ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4'
+                          : 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6'
+                      }`}>
+                        {Array.from({ length: wordCount }).map((_, i) => (
+                          <div key={i} className="flex items-center gap-1.5">
+                            <div className="flex-1 h-11 rounded-lg bg-zinc-800/50 animate-pulse border border-zinc-700/30 flex items-center pl-7">
+                              <div className="h-3 w-12 rounded bg-zinc-700/40" />
+                            </div>
+                            <div className="h-11 w-11 rounded-lg bg-zinc-800/30 animate-pulse border border-zinc-700/20" />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
                   <div className={`grid gap-2 ${
                     wordCount === 12
                       ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4'
@@ -1625,6 +1718,7 @@ export default function Home() {
                       />
                     ))}
                   </div>
+                  )}
                   {unknownCount > 0 && knownCount >= (wordCount === 12 ? 8 : 16) && (
                     <motion.p
                       initial={{ opacity: 0 }}
@@ -1691,6 +1785,37 @@ export default function Home() {
                   </div>
                 </CardHeader>
                 <CardContent className="pt-0 space-y-5">
+                  {/* Wallet Presets */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <Sparkles className="h-3 w-3 text-emerald-400" />
+                      <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium">Quick Presets</span>
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {WALLET_PRESETS.map((preset) => {
+                        const isActive = blockchain === preset.blockchain && derivationPath === preset.path
+                        return (
+                          <button
+                            key={preset.name}
+                            onClick={() => {
+                              setBlockchain(preset.blockchain)
+                              setDerivationPath(preset.path)
+                            }}
+                            disabled={isRunning}
+                            className={`preset-pill inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-medium border transition-all duration-200 ${
+                              isActive
+                                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 shadow-sm shadow-emerald-500/10'
+                                : 'bg-zinc-800/40 border-zinc-700/40 text-zinc-400 hover:border-emerald-500/20 hover:bg-emerald-500/5 hover:text-zinc-300'
+                            } disabled:opacity-50 disabled:cursor-not-allowed`}
+                          >
+                            <span className="text-sm">{preset.icon}</span>
+                            {preset.name}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+
                   {/* Blockchain Selector */}
                   <div>
                     <label className="text-xs font-medium text-zinc-400 mb-2 block text-center sm:text-left">Blockchain Network</label>
@@ -2732,6 +2857,120 @@ export default function Home() {
               transition={{ duration: 0.2 }}
               className="space-y-4"
             >
+              {/* ── Recovery Analytics Dashboard ── */}
+              {(() => {
+                const allEntries = [
+                  ...persistedHistory.map(e => ({ found: e.found, blockchain: e.blockchain, timestamp: e.timestamp })),
+                  ...jobHistory
+                    .filter(j => j.status === 'completed' || j.status === 'stopped')
+                    .map(j => ({
+                      found: !!(j.result && j.result.length > 0),
+                      blockchain: j.blockchain,
+                      timestamp: j.startedAt || Date.now(),
+                    })),
+                ]
+                if (allEntries.length === 0) return null
+                const successful = allEntries.filter(e => e.found).length
+                const failed = allEntries.filter(e => !e.found).length
+                // Pie chart data
+                const pieData = [
+                  { name: 'Found', value: successful, color: '#10b981' },
+                  { name: 'No Match', value: failed, color: '#f59e0b' },
+                ].filter(d => d.value > 0)
+                // Bar chart data - blockchain distribution
+                const chainCounts: Record<string, number> = {}
+                allEntries.forEach(e => {
+                  const name = BLOCKCHAIN_CONFIG[e.blockchain as Blockchain]?.symbol || e.blockchain
+                  chainCounts[name] = (chainCounts[name] || 0) + 1
+                })
+                const barData = Object.entries(chainCounts).map(([name, count]) => ({
+                  name,
+                  count,
+                  fill: name === 'BTC' ? '#f97316' : name === 'ETH' ? '#10b981' : name === 'SOL' ? '#06b6d4' : '#14b8a6',
+                }))
+
+                return (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.3 }}
+                  >
+                    <Card className="bg-zinc-900/40 border-zinc-800/50">
+                      <CardHeader className="pb-3">
+                        <div className="flex items-center gap-2">
+                          <BarChart3 className="h-4 w-4 text-cyan-400" />
+                          <CardTitle className="text-base font-semibold">Recovery Analytics</CardTitle>
+                          <Badge variant="outline" className="text-[8px] border-zinc-700 text-zinc-500 h-4 px-1.5 ml-auto">
+                            {allEntries.length} entries
+                          </Badge>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="pt-0">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          {/* Success Rate Donut Chart */}
+                          <div className="bg-zinc-800/20 rounded-xl p-3 border border-zinc-800/30">
+                            <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium mb-2 text-center">Success Rate</p>
+                            <div className="h-[160px] flex items-center justify-center">
+                              <ResponsiveContainer width="100%" height="100%">
+                                <PieChart>
+                                  <Pie
+                                    data={pieData}
+                                    cx="50%"
+                                    cy="50%"
+                                    innerRadius={40}
+                                    outerRadius={60}
+                                    paddingAngle={4}
+                                    dataKey="value"
+                                    stroke="none"
+                                  >
+                                    {pieData.map((entry, index) => (
+                                      <Cell key={`cell-${index}`} fill={entry.color} />
+                                    ))}
+                                  </Pie>
+                                  <RechartsTooltip
+                                    contentStyle={{ background: 'rgba(24,24,27,0.95)', border: '1px solid rgba(39,39,42,0.5)', borderRadius: 8, fontSize: 12 }}
+                                    itemStyle={{ color: '#d4d4d8' }}
+                                  />
+                                </PieChart>
+                              </ResponsiveContainer>
+                            </div>
+                            <div className="flex items-center justify-center gap-4 mt-1">
+                              {pieData.map((d) => (
+                                <div key={d.name} className="flex items-center gap-1.5">
+                                  <div className="h-2 w-2 rounded-full" style={{ backgroundColor: d.color }} />
+                                  <span className="text-[10px] text-zinc-400">{d.name} ({d.value})</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                          {/* Blockchain Distribution Bar Chart */}
+                          <div className="bg-zinc-800/20 rounded-xl p-3 border border-zinc-800/30">
+                            <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium mb-2 text-center">Blockchain Distribution</p>
+                            <div className="h-[160px]">
+                              <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={barData} barSize={32}>
+                                  <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#71717a' }} axisLine={false} tickLine={false} />
+                                  <YAxis tick={{ fontSize: 10, fill: '#71717a' }} axisLine={false} tickLine={false} allowDecimals={false} />
+                                  <RechartsTooltip
+                                    contentStyle={{ background: 'rgba(24,24,27,0.95)', border: '1px solid rgba(39,39,42,0.5)', borderRadius: 8, fontSize: 12 }}
+                                    itemStyle={{ color: '#d4d4d8' }}
+                                  />
+                                  <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+                                    {barData.map((entry, index) => (
+                                      <Cell key={`bar-cell-${index}`} fill={entry.fill} />
+                                    ))}
+                                  </Bar>
+                                </BarChart>
+                              </ResponsiveContainer>
+                            </div>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </motion.div>
+                )
+              })()}
+
               {/* ── Recovery Stats Summary ── */}
               {(() => {
                 // Combine persisted history and session jobs for stats
