@@ -3525,7 +3525,7 @@ export default function Home() {
                 </span>
                 <div className="flex items-center gap-1.5 mt-0.5">
                   <Badge variant="outline" className="text-[7px] h-3.5 px-1.5 border-emerald-500/20 text-emerald-500/60 bg-emerald-500/5">
-                    v2.0
+                    v2.2
                   </Badge>
                   <span className="text-[8px] text-zinc-700">
                     &copy; {new Date().getFullYear()}
@@ -3537,8 +3537,8 @@ export default function Home() {
             <div className="flex items-center gap-1.5 flex-wrap justify-center">
               {[
                 { icon: <Server className="h-2.5 w-2.5" />, label: 'No Server Storage', color: 'emerald' },
-                { icon: <Lock className="h-2.5 w-2.5" />, label: 'In-Memory Only', color: 'cyan' },
-                { icon: <BookOpen className="h-2.5 w-2.5" />, label: 'Open Source', color: 'teal' },
+                { icon: <Lock className="h-2.5 w-2.5" />, label: 'Zero-Knowledge', color: 'cyan' },
+                { icon: <BookOpen className="h-2.5 w-2.5" />, label: 'Powered by BIP39', color: 'teal' },
                 { icon: <Shield className="h-2.5 w-2.5" />, label: 'Self-Recovery Only', color: 'amber' },
               ].map((badge) => (
                 <span
