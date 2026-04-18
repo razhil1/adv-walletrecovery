@@ -231,3 +231,245 @@
 .checkmark-pop {
   animation: checkmark-pop 0.3s ease-out forwards;
 }
+
+/* ─── Light Mode Overrides ──────────────────────────────────────────────────── */
+/* When .dark class is NOT present on html, apply light mode overrides */
+/* This works with next-themes toggling the .dark class */
+
+html:not(.dark) {
+  /* Override main backgrounds from zinc-950 to white/zinc-50 */
+  --cr-bg-primary: #fafafa;
+  --cr-bg-card: #ffffff;
+  --cr-bg-card-subtle: #f4f4f5;
+  --cr-bg-input: #ffffff;
+  --cr-bg-hover: #f4f4f5;
+  --cr-bg-overlay: rgba(255, 255, 255, 0.95);
+  --cr-text-primary: #18181b;
+  --cr-text-secondary: #3f3f46;
+  --cr-text-muted: #71717a;
+  --cr-text-faint: #a1a1aa;
+  --cr-border: #e4e4e7;
+  --cr-border-subtle: #f4f4f5;
+}
+
+.dark {
+  --cr-bg-primary: #09090b;
+  --cr-bg-card: rgba(24, 24, 27, 0.4);
+  --cr-bg-card-subtle: rgba(24, 24, 27, 0.3);
+  --cr-bg-input: rgba(24, 24, 27, 0.8);
+  --cr-bg-hover: rgba(39, 39, 42, 0.5);
+  --cr-bg-overlay: rgba(24, 24, 27, 0.95);
+  --cr-text-primary: #f4f4f5;
+  --cr-text-secondary: #d4d4d8;
+  --cr-text-muted: #71717a;
+  --cr-text-faint: #52525b;
+  --cr-border: rgba(39, 39, 42, 0.5);
+  --cr-border-subtle: rgba(39, 39, 42, 0.3);
+}
+
+/* Light mode scrollbar */
+html:not(.dark) ::-webkit-scrollbar-thumb {
+  background: #d4d4d8;
+}
+html:not(.dark) ::-webkit-scrollbar-thumb:hover {
+  background: #a1a1aa;
+}
+html:not(.dark) * {
+  scrollbar-color: #d4d4d8 transparent;
+}
+
+/* Animated gradient border for recovery in progress */
+@keyframes gradient-border-spin {
+  0% {
+    --gradient-angle: 0deg;
+  }
+  100% {
+    --gradient-angle: 360deg;
+  }
+}
+
+@property --gradient-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.recovery-gradient-border {
+  position: relative;
+  border: 2px solid transparent !important;
+  background-clip: padding-box;
+}
+
+.recovery-gradient-border::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  z-index: -1;
+  border-radius: inherit;
+  background: conic-gradient(
+    from var(--gradient-angle),
+    #10b981,
+    #06b6d4,
+    #14b8a6,
+    #10b981
+  );
+  animation: gradient-border-spin 2.5s linear infinite;
+}
+
+.recovery-gradient-border::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: #18181b;
+}
+
+/* Shimmer animation for selected blockchain button */
+@keyframes shimmer {
+  0% {
+    background-position: -200% center;
+  }
+  100% {
+    background-position: 200% center;
+  }
+}
+
+.blockchain-shimmer {
+  background-size: 200% auto;
+  animation: shimmer 3s linear infinite;
+}
+
+/* Floating dots animation */
+@keyframes float-dot-1 {
+  0%, 100% {
+    transform: translate(0, 0);
+    opacity: 0.15;
+  }
+  25% {
+    transform: translate(30px, -20px);
+    opacity: 0.3;
+  }
+  50% {
+    transform: translate(-15px, -40px);
+    opacity: 0.15;
+  }
+  75% {
+    transform: translate(20px, -15px);
+    opacity: 0.25;
+  }
+}
+
+@keyframes float-dot-2 {
+  0%, 100% {
+    transform: translate(0, 0);
+    opacity: 0.1;
+  }
+  33% {
+    transform: translate(-25px, -30px);
+    opacity: 0.25;
+  }
+  66% {
+    transform: translate(15px, -15px);
+    opacity: 0.1;
+  }
+}
+
+@keyframes float-dot-3 {
+  0%, 100% {
+    transform: translate(0, 0);
+    opacity: 0.2;
+  }
+  50% {
+    transform: translate(20px, -35px);
+    opacity: 0.1;
+  }
+}
+
+.floating-dot {
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+/* ─── Pulse Ring Animation for Progress Card ─── */
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.15);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(16, 185, 129, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+}
+
+.pulse-ring {
+  animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* ─── Gradient Text Animation ─── */
+@keyframes gradient-shift {
+  0% {
+    background-position: 0% center;
+  }
+  50% {
+    background-position: 100% center;
+  }
+  100% {
+    background-position: 0% center;
+  }
+}
+
+.animated-gradient-text {
+  background-size: 200% auto;
+  animation: gradient-shift 4s ease-in-out infinite;
+}
+
+/* ─── Card Hover Lift Effect ─── */
+.card-lift {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.card-lift:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+/* ─── Step Connector Line ─── */
+.step-connector {
+  position: relative;
+}
+.step-connector::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: -12px;
+  width: 24px;
+  height: 1px;
+  background: linear-gradient(to right, rgba(16, 185, 129, 0.3), rgba(6, 182, 212, 0.3));
+}
+
+/* ─── Glow on focus for inputs ─── */
+@keyframes input-glow {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+  50% {
+    box-shadow: 0 0 8px rgba(16, 185, 129, 0.15);
+  }
+}
+
+/* ─── Tab indicator animation ─── */
+@keyframes tab-slide-in {
+  0% {
+    transform: scaleX(0);
+    opacity: 0;
+  }
+  100% {
+    transform: scaleX(1);
+    opacity: 1;
+  }
+}

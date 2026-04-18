@@ -46,6 +46,7 @@ export interface RecoveryJob {
   id: string;
   partialMnemonic: (string | null)[];
   knownAddress: string;
+  knownAddresses: string[]; // multiple addresses to verify against
   blockchain: Blockchain;
   derivationPath: string;
   status: 'pending' | 'running' | 'completed' | 'failed' | 'stopped';
@@ -62,6 +63,8 @@ export interface RecoveryJob {
   autoRetry?: boolean; // whether multi-path auto-retry is enabled
   // BIP39 checksum estimate
   validCombinationsEstimate?: number; // estimated valid combinations after BIP39 checksum filter
+  // Checksum-first mode
+  checksumFirst?: boolean; // if true, skip address derivation for invalid BIP39 checksums (two-phase approach)
 }
 
 // ─── In-memory job store ─────────────────────────────────────────────────────
@@ -290,7 +293,9 @@ export function createJob(
   knownAddress: string,
   blockchain: Blockchain,
   derivationPath?: string,
-  autoRetry?: boolean
+  autoRetry?: boolean,
+  knownAddresses?: string[],
+  checksumFirst?: boolean
 ): RecoveryJob {
   const wordlist = getWordlist();
   const unknownPositions = partialMnemonic.reduce((acc, word, i) => {
@@ -309,10 +314,16 @@ export function createJob(
   // BIP39 checksum filters out ~93.75% of candidates, so ~6.25% pass
   const validCombinationsEstimate = Math.floor(total * 0.0625);
 
+  // Build knownAddresses array: if provided use it, otherwise wrap single knownAddress
+  const addresses = knownAddresses && knownAddresses.length > 0
+    ? knownAddresses.filter(a => a.trim().length > 0)
+    : [knownAddress];
+
   const job: RecoveryJob = {
     id: uuidv4(),
     partialMnemonic,
     knownAddress,
+    knownAddresses: addresses,
     blockchain,
     derivationPath: path,
     status: 'pending',
@@ -326,6 +337,7 @@ export function createJob(
     pathSwitchAt: undefined,
     autoRetry: autoRetry ?? false,
     validCombinationsEstimate,
+    checksumFirst: checksumFirst ?? false,
   };
 
   jobs.set(job.id, job);
@@ -383,7 +395,9 @@ export function startRecovery(job: RecoveryJob): void {
       try {
         if (bip39.validateMnemonic(mnemonic)) {
           const address = await deriveAddress(mnemonic, job.blockchain, job.derivationPath);
-          const match = compareAddresses(address, job.knownAddress, job.blockchain);
+          const match = job.knownAddresses.some(knownAddr =>
+            compareAddresses(address, knownAddr, job.blockchain)
+          );
           if (match) {
             job.result = [mnemonic];
             job.foundAt = Date.now();
@@ -412,7 +426,7 @@ export function startRecovery(job: RecoveryJob): void {
   job.startedAt = Date.now();
 
   const total = job.total;
-  const BATCH_SIZE = 500;
+  const BATCH_SIZE = job.checksumFirst ? 2000 : 500;
 
   let counter = 0;
 
@@ -427,22 +441,27 @@ export function startRecovery(job: RecoveryJob): void {
     const batchEnd = Math.min(counter + BATCH_SIZE, total);
     const batchSize = batchEnd - counter;
 
-    const promises: Promise<string | null>[] = [];
+    if (job.checksumFirst) {
+      // Two-phase approach: Phase 1 - validate checksums (fast), Phase 2 - derive addresses (slow)
+      const validMnemonics: string[] = [];
 
-    for (let i = 0; i < batchSize; i++) {
-      const indices = counterToIndices(counter + i, unknownCount, wordlistLength);
-      const mnemonic = buildCandidate(job.partialMnemonic, unknownPositions, wordlist, indices);
+      // Phase 1: Build candidates and validate BIP39 checksums (CPU-bound, fast)
+      for (let i = 0; i < batchSize; i++) {
+        const indices = counterToIndices(counter + i, unknownCount, wordlistLength);
+        const mnemonic = buildCandidate(job.partialMnemonic, unknownPositions, wordlist, indices);
+        if (bip39.validateMnemonic(mnemonic)) {
+          validMnemonics.push(mnemonic);
+        }
+      }
 
-      promises.push(
+      // Phase 2: Derive addresses only for valid mnemonics (async, slow)
+      const promises: Promise<string | null>[] = validMnemonics.map(mnemonic =>
         (async (): Promise<string | null> => {
           try {
-            // Validate mnemonic checksum first - eliminates ~93.75% of candidates
-            if (!bip39.validateMnemonic(mnemonic)) {
-              return null;
-            }
-            // Derive address and compare
             const address = await deriveAddress(mnemonic, job.blockchain, job.derivationPath);
-            if (compareAddresses(address, job.knownAddress, job.blockchain)) {
+            if (job.knownAddresses.some(knownAddr =>
+              compareAddresses(address, knownAddr, job.blockchain)
+            )) {
               return mnemonic;
             }
             return null;
@@ -451,39 +470,98 @@ export function startRecovery(job: RecoveryJob): void {
           }
         })()
       );
-    }
 
-    try {
-      const results = await Promise.all(promises);
+      try {
+        const results = await Promise.all(promises);
 
-      counter = batchEnd;
-      job.progress = counter;
+        counter = batchEnd;
+        job.progress = counter;
 
-      const elapsed = (Date.now() - job.startedAt) / 1000;
-      job.speed = elapsed > 0 ? Math.round(counter / elapsed) : 0;
+        const elapsed = (Date.now() - job.startedAt) / 1000;
+        job.speed = elapsed > 0 ? Math.round(counter / elapsed) : 0;
 
-      // Check for matches
-      const matches = results.filter((r): r is string => r !== null);
+        const matches = results.filter((r): r is string => r !== null);
 
-      if (matches.length > 0) {
-        job.result = matches;
-        job.status = 'completed';
-        job.foundAt = Date.now();
-        return;
+        if (matches.length > 0) {
+          job.result = matches;
+          job.status = 'completed';
+          job.foundAt = Date.now();
+          return;
+        }
+
+        if (counter >= total) {
+          job.status = 'completed';
+          job.result = [];
+          return;
+        }
+
+        setTimeout(processBatch, 0);
+      } catch (err) {
+        job.status = 'failed';
+        console.error('Recovery batch error:', err);
+      }
+    } else {
+      // Normal mode: validate checksum + derive in same pass
+      const promises: Promise<string | null>[] = [];
+
+      for (let i = 0; i < batchSize; i++) {
+        const indices = counterToIndices(counter + i, unknownCount, wordlistLength);
+        const mnemonic = buildCandidate(job.partialMnemonic, unknownPositions, wordlist, indices);
+
+        promises.push(
+          (async (): Promise<string | null> => {
+            try {
+              // Validate mnemonic checksum first - eliminates ~93.75% of candidates
+              if (!bip39.validateMnemonic(mnemonic)) {
+                return null;
+              }
+              // Derive address and compare against all known addresses
+              const address = await deriveAddress(mnemonic, job.blockchain, job.derivationPath);
+              if (job.knownAddresses.some(knownAddr =>
+                compareAddresses(address, knownAddr, job.blockchain)
+              )) {
+                return mnemonic;
+              }
+              return null;
+            } catch {
+              return null;
+            }
+          })()
+        );
       }
 
-      // Check if we've exhausted all combinations
-      if (counter >= total) {
-        job.status = 'completed';
-        job.result = [];
-        return;
-      }
+      try {
+        const results = await Promise.all(promises);
 
-      // Schedule next batch (setTimeout to not block event loop)
-      setTimeout(processBatch, 0);
-    } catch (err) {
-      job.status = 'failed';
-      console.error('Recovery batch error:', err);
+        counter = batchEnd;
+        job.progress = counter;
+
+        const elapsed = (Date.now() - job.startedAt) / 1000;
+        job.speed = elapsed > 0 ? Math.round(counter / elapsed) : 0;
+
+        // Check for matches
+        const matches = results.filter((r): r is string => r !== null);
+
+        if (matches.length > 0) {
+          job.result = matches;
+          job.status = 'completed';
+          job.foundAt = Date.now();
+          return;
+        }
+
+        // Check if we've exhausted all combinations
+        if (counter >= total) {
+          job.status = 'completed';
+          job.result = [];
+          return;
+        }
+
+        // Schedule next batch (setTimeout to not block event loop)
+        setTimeout(processBatch, 0);
+      } catch (err) {
+        job.status = 'failed';
+        console.error('Recovery batch error:', err);
+      }
     }
   }
 

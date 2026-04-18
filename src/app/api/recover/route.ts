@@ -15,11 +15,13 @@ export const runtime = 'nodejs';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { partialMnemonic, knownAddress, blockchain, derivationPath } = body as {
+    const { partialMnemonic, knownAddress, blockchain, derivationPath, knownAddresses, checksumFirst } = body as {
       partialMnemonic: (string | null)[];
       knownAddress: string;
       blockchain: Blockchain;
       derivationPath?: string;
+      knownAddresses?: string[];
+      checksumFirst?: boolean;
     };
 
     // Validate inputs
@@ -82,8 +84,13 @@ export async function POST(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const autoRetry = searchParams.get('autoRetry') === 'true';
 
+    // Validate knownAddresses if provided
+    const validatedAddresses = knownAddresses && Array.isArray(knownAddresses)
+      ? knownAddresses.filter((a: string) => typeof a === 'string' && a.trim().length > 0)
+      : undefined;
+
     // Create and start the job
-    const job = createJob(partialMnemonic, knownAddress.trim(), blockchain, derivationPath, autoRetry);
+    const job = createJob(partialMnemonic, knownAddress.trim(), blockchain, derivationPath, autoRetry, validatedAddresses, checksumFirst);
 
     if (autoRetry) {
       startMultiPathRecovery(job);

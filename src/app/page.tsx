@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useTheme } from 'next-themes'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -65,6 +66,19 @@ import {
   ClipboardPaste,
   TrendingUp,
   BarChart3,
+  Github,
+  Code2,
+  Server,
+  BookOpen,
+  RefreshCw,
+  Gauge,
+  Route,
+  Sun,
+  Moon,
+  Plus,
+  X as XIcon,
+  FileDown,
+  Command,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -87,6 +101,7 @@ interface RecoveryJob {
   id: string
   partialMnemonic: (string | null)[]
   knownAddress: string
+  knownAddresses: string[]
   blockchain: Blockchain
   derivationPath: string
   status: 'pending' | 'running' | 'completed' | 'failed' | 'stopped'
@@ -101,6 +116,7 @@ interface RecoveryJob {
   pathSwitchAt?: number
   autoRetry?: boolean
   validCombinationsEstimate?: number
+  checksumFirst?: boolean
 }
 
 interface VerifyResult {
@@ -166,6 +182,31 @@ function validateAddress(address: string, blockchain: Blockchain): { valid: bool
     default:
       return { valid: false, hint: 'Unknown blockchain' }
   }
+}
+
+const SUPPORTED_WALLETS: Record<Blockchain, { name: string; icon: string }[]> = {
+  btc: [
+    { name: 'Electrum', icon: '⚡' },
+    { name: 'Ledger', icon: '🔐' },
+    { name: 'Trezor', icon: '🛡' },
+    { name: 'Wasabi', icon: '🟢' },
+  ],
+  eth: [
+    { name: 'MetaMask', icon: '🦊' },
+    { name: 'Trust Wallet', icon: '🛡' },
+    { name: 'Ledger', icon: '🔐' },
+    { name: 'MyEtherWallet', icon: '💎' },
+  ],
+  sol: [
+    { name: 'Phantom', icon: '👻' },
+    { name: 'Solflare', icon: '☀' },
+    { name: 'Ledger', icon: '🔐' },
+  ],
+  xrp: [
+    { name: 'Xumm', icon: '✕' },
+    { name: 'Ledger', icon: '🔐' },
+    { name: 'Trust Wallet', icon: '🛡' },
+  ],
 }
 
 const BLOCKCHAIN_CONFIG: Record<
@@ -451,6 +492,7 @@ function FaqItem({ question, answer }: { question: string; answer: string }) {
 // ─── Main Page Component ─────────────────────────────────────────────────────
 
 export default function Home() {
+  const { theme, setTheme } = useTheme()
   // ── State ──
   const [wordCount, setWordCount] = useState<12 | 24>(12)
   const [words, setWords] = useState<(string | null)[]>(Array(12).fill(''))
@@ -497,6 +539,15 @@ export default function Home() {
 
   // Auto-retry state
   const [autoRetry, setAutoRetry] = useState(true)
+
+  // Multi-address verification state
+  const [additionalAddresses, setAdditionalAddresses] = useState<string[]>([])
+
+  // Checksum-first (priority mode) state
+  const [checksumFirst, setChecksumFirst] = useState(false)
+
+  // Keyboard shortcuts dialog state
+  const [showShortcutsDialog, setShowShortcutsDialog] = useState(false)
 
   // Live elapsed timer state
   const [liveElapsedSeconds, setLiveElapsedSeconds] = useState(0)
@@ -675,6 +726,37 @@ export default function Home() {
     }
   }, [jobStatus?.currentPathIndex, jobStatus?.autoRetry, jobStatus?.blockchain, isRunning])
 
+  // ── Keyboard shortcuts ──
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      // Ctrl+1/2/3 to switch tabs
+      if (e.ctrlKey && e.key === '1') {
+        e.preventDefault()
+        setActiveTab('recover')
+      } else if (e.ctrlKey && e.key === '2') {
+        e.preventDefault()
+        setActiveTab('verify')
+      } else if (e.ctrlKey && e.key === '3') {
+        e.preventDefault()
+        setActiveTab('history')
+      }
+      // Ctrl+Enter to start recovery (when on Recovery tab)
+      if (e.ctrlKey && e.key === 'Enter' && activeTab === 'recover') {
+        e.preventDefault()
+        if (!isRunning && !isCompleted && !isFailed && !isStopped) {
+          handleStartRecovery()
+        }
+      }
+      // Ctrl+Shift+V to open paste dialog (when on Recovery tab)
+      if (e.ctrlKey && e.shiftKey && e.key === 'V' && activeTab === 'recover') {
+        e.preventDefault()
+        if (!isRunning) setShowPasteDialog(true)
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [activeTab, isRunning, isCompleted, isFailed, isStopped])
+
   // Check if all words are valid BIP39 words
   const allWordsValid = useMemo(() => {
     if (wordlist.length === 0) return false
@@ -686,6 +768,26 @@ export default function Home() {
     if (wordlist.length === 0) return 0
     return words.filter((w) => w !== null && w.length > 0 && wordlist.includes(w)).length
   }, [words, wordlist])
+
+  // ── Seed phrase strength analysis ──
+  const strengthInfo = useMemo(() => {
+    const minKnown = wordCount === 12 ? 8 : 16
+    if (knownCount < minKnown) {
+      return { level: 'weak', color: 'red', label: 'Too Few Words', description: `Need at least ${minKnown} known words`, pct: (knownCount / minKnown) * 50 }
+    }
+    if (wordCount === 12) {
+      if (knownCount <= 9) return { level: 'low', color: 'red', label: 'Low', description: 'Recovery likelihood: Low', pct: 30 }
+      if (knownCount === 10) return { level: 'moderate', color: 'amber', label: 'Moderate', description: 'Recovery likelihood: Moderate', pct: 55 }
+      if (knownCount === 11) return { level: 'high', color: 'green', label: 'High', description: 'Recovery likelihood: High', pct: 80 }
+      return { level: 'complete', color: 'green', label: 'Complete', description: 'All words known', pct: 100 }
+    } else {
+      // 24-word
+      if (knownCount <= 18) return { level: 'low', color: 'red', label: 'Low', description: 'Recovery likelihood: Low', pct: 30 }
+      if (knownCount <= 20) return { level: 'moderate', color: 'amber', label: 'Moderate', description: 'Recovery likelihood: Moderate', pct: 55 }
+      if (knownCount <= 22) return { level: 'high', color: 'green', label: 'High', description: 'Recovery likelihood: High', pct: 80 }
+      return { level: 'complete', color: 'green', label: 'Complete', description: 'All words known', pct: 100 }
+    }
+  }, [knownCount, wordCount])
 
   // Derive preview handler
   const handleDerivePreview = async () => {
@@ -817,14 +919,17 @@ export default function Home() {
     setIsStarting(true)
     try {
       const autoRetryParam = autoRetry && BLOCKCHAIN_CONFIG[blockchain].paths.length > 1 ? '?autoRetry=true' : ''
+      const allAddresses = [knownAddress.trim(), ...additionalAddresses.map(a => a.trim()).filter(a => a.length > 0)]
       const res = await fetch(`/api/recover${autoRetryParam}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           partialMnemonic,
           knownAddress: knownAddress.trim(),
+          knownAddresses: allAddresses.length > 1 ? allAddresses : undefined,
           blockchain,
           derivationPath,
+          checksumFirst,
         }),
       })
       const data = await res.json()
@@ -863,6 +968,7 @@ export default function Home() {
     setWords(Array(wordCount).fill(''))
     setInputValues(Array(wordCount).fill(''))
     setKnownAddress('')
+    setAdditionalAddresses([])
     setJobId(null)
     setJobStatus(null)
     setCopied(false)
@@ -952,6 +1058,64 @@ export default function Home() {
     }
   }
 
+  const handleExportHistory = (format: 'json' | 'csv') => {
+    // Combine persisted history and session jobs
+    const entries = [
+      ...persistedHistory.map(e => ({
+        date: new Date(e.timestamp).toISOString(),
+        blockchain: BLOCKCHAIN_CONFIG[e.blockchain]?.name || e.blockchain,
+        derivationPath: e.derivationPath,
+        address: e.knownAddress,
+        status: e.found ? 'Found' : 'No Match',
+        found: e.found,
+      })),
+      ...jobHistory
+        .filter(j => j.status === 'completed' || j.status === 'stopped')
+        .map(j => ({
+          date: j.startedAt ? new Date(j.startedAt).toISOString() : '',
+          blockchain: BLOCKCHAIN_CONFIG[j.blockchain]?.name || j.blockchain,
+          derivationPath: j.derivationPath,
+          address: j.knownAddress,
+          status: j.result && j.result.length > 0 ? 'Found' : 'No Match',
+          found: !!(j.result && j.result.length > 0),
+        })),
+    ]
+
+    if (entries.length === 0) {
+      toast.error('No history to export')
+      return
+    }
+
+    let content: string
+    let filename: string
+    let mimeType: string
+
+    if (format === 'csv') {
+      const header = 'Date,Blockchain,Derivation Path,Address,Status,Found'
+      const rows = entries.map(e =>
+        `${e.date},${e.blockchain},"${e.derivationPath}","${e.address}",${e.status},${e.found}`
+      )
+      content = [header, ...rows].join('\n')
+      filename = `cryptorecover-history-${Date.now()}.csv`
+      mimeType = 'text/csv'
+    } else {
+      content = JSON.stringify(entries, null, 2)
+      filename = `cryptorecover-history-${Date.now()}.json`
+      mimeType = 'application/json'
+    }
+
+    const blob = new Blob([content], { type: mimeType })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    toast.success(`History exported as ${format.toUpperCase()}`)
+  }
+
   const handleExportResult = () => {
     if (jobStatus?.result && jobStatus.result.length > 0) {
       const result = jobStatus.result[0]
@@ -1028,11 +1192,55 @@ export default function Home() {
 
   return (
     <div className="min-h-screen flex flex-col bg-zinc-950 text-zinc-100">
-      {/* ── Background Grid ── */}
-      <div className="fixed inset-0 z-0 pointer-events-none">
+      {/* ── Background Grid + Floating Dots + Gradient Orbs ── */}
+      <div className="fixed inset-0 z-0 pointer-events-none overflow-hidden">
+        {/* Grid pattern */}
         <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.02)_1px,transparent_1px)] bg-[size:64px_64px]" />
-        <div className="absolute top-0 left-1/4 w-96 h-96 bg-emerald-500/5 rounded-full blur-[128px]" />
-        <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-cyan-500/5 rounded-full blur-[128px]" />
+        {/* Large gradient orbs */}
+        <div className="absolute top-0 left-1/4 w-[500px] h-[500px] bg-emerald-500/[0.04] rounded-full blur-[160px]" />
+        <div className="absolute bottom-0 right-1/4 w-[500px] h-[500px] bg-cyan-500/[0.04] rounded-full blur-[160px]" />
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-teal-500/[0.02] rounded-full blur-[200px]" />
+        {/* Floating dots - emerald */}
+        {Array.from({ length: 20 }).map((_, i) => (
+          <div
+            key={`em-${i}`}
+            className="floating-dot bg-emerald-400/20"
+            style={{
+              left: `${5 + (i * 4.7) % 90}%`,
+              top: `${10 + (i * 7.3) % 80}%`,
+              animation: `float-dot-${(i % 3) + 1} ${15 + (i * 3) % 20}s ease-in-out infinite`,
+              animationDelay: `${(i * 1.7) % 10}s`,
+            }}
+          />
+        ))}
+        {/* Floating dots - cyan */}
+        {Array.from({ length: 15 }).map((_, i) => (
+          <div
+            key={`cy-${i}`}
+            className="floating-dot bg-cyan-400/15"
+            style={{
+              left: `${8 + (i * 5.9) % 85}%`,
+              top: `${15 + (i * 6.1) % 75}%`,
+              animation: `float-dot-${(i % 3) + 1} ${18 + (i * 2.3) % 22}s ease-in-out infinite`,
+              animationDelay: `${(i * 2.1) % 12}s`,
+            }}
+          />
+        ))}
+        {/* Floating dots - teal (new) */}
+        {Array.from({ length: 8 }).map((_, i) => (
+          <div
+            key={`tl-${i}`}
+            className="floating-dot bg-teal-400/10"
+            style={{
+              left: `${12 + (i * 8.3) % 80}%`,
+              top: `${20 + (i * 5.7) % 70}%`,
+              animation: `float-dot-${(i % 3) + 1} ${20 + (i * 4) % 25}s ease-in-out infinite`,
+              animationDelay: `${(i * 3.2) % 15}s`,
+              width: '4px',
+              height: '4px',
+            }}
+          />
+        ))}
       </div>
 
       {/* ── Header ── */}
@@ -1048,6 +1256,40 @@ export default function Home() {
             <p className="text-[9px] text-zinc-600 tracking-wider uppercase">Legitimate Wallet Recovery Tool</p>
           </div>
           <div className="ml-auto flex items-center gap-2">
+            <TooltipProvider delayDuration={300}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800"
+                    onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+                  >
+                    {theme === 'dark' ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="text-xs">
+                  {theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+            <TooltipProvider delayDuration={300}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800"
+                    onClick={() => setShowShortcutsDialog(true)}
+                  >
+                    <Command className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="text-xs">
+                  Keyboard shortcuts
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
             <Badge
               variant="outline"
               className="border-emerald-500/30 text-emerald-400 bg-emerald-500/10 text-[9px] gap-1 h-6"
@@ -1080,7 +1322,17 @@ export default function Home() {
             transition={{ duration: 0.5 }}
             className="text-center mb-6"
           >
-            <h2 className="text-2xl sm:text-3xl font-bold tracking-tight bg-gradient-to-r from-zinc-100 via-zinc-300 to-zinc-100 bg-clip-text text-transparent">
+            {/* Animated badge above title */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ delay: 0.2, duration: 0.3 }}
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 mb-4"
+            >
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="text-[10px] font-medium text-emerald-400">Secure &amp; Private Recovery</span>
+            </motion.div>
+            <h2 className="text-2xl sm:text-3xl font-bold tracking-tight bg-gradient-to-r from-zinc-100 via-emerald-200 to-zinc-100 bg-clip-text text-transparent animated-gradient-text">
               Recover Your Crypto Wallet
             </h2>
             <p className="text-sm text-zinc-500 mt-2 max-w-xl mx-auto">
@@ -1123,7 +1375,7 @@ export default function Home() {
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: idx * 0.1 + 0.2, duration: 0.4 }}
               >
-                <Card className={`bg-zinc-900/40 border-zinc-800/50 ${item.border} transition-all duration-300 py-4 relative overflow-hidden group`}>
+                <Card className={`bg-zinc-900/40 border-zinc-800/50 ${item.border} transition-all duration-300 py-4 relative overflow-hidden group card-lift`}>
                   <div className={`absolute inset-0 bg-gradient-to-b ${item.gradient} to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500`} />
                   <CardContent className="pt-0 flex flex-col items-center text-center gap-2 px-4 relative z-10">
                     <div className="flex items-center justify-center h-9 w-9 rounded-full bg-zinc-800/80 border border-zinc-700/80 shadow-inner shadow-white/5">
@@ -1145,7 +1397,10 @@ export default function Home() {
         </section>
 
         {/* ── Gradient divider between steps and content ── */}
-        <div className="h-px bg-gradient-to-r from-transparent via-emerald-500/30 to-transparent" />
+        <div className="relative h-px">
+          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-emerald-500/30 to-transparent" />
+          <div className="absolute left-1/2 -translate-x-1/2 -top-1 h-2 w-2 rounded-full bg-emerald-500/40 border border-emerald-500/20" />
+        </div>
 
         {/* ── Security Stats ── */}
         <motion.section
@@ -1155,19 +1410,55 @@ export default function Home() {
         >
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {[
-              { icon: <Globe className="h-3.5 w-3.5" />, label: 'Blockchains', value: '4' },
-              { icon: <Database className="h-3.5 w-3.5" />, label: 'BIP39 Words', value: '2,048' },
-              { icon: <Cpu className="h-3.5 w-3.5" />, label: 'Derivation Paths', value: '9' },
-              { icon: <Lock className="h-3.5 w-3.5" />, label: 'Data Stored', value: 'None' },
+              { icon: <Globe className="h-3.5 w-3.5" />, label: 'Blockchains', value: '4', accent: 'text-emerald-400', bgAccent: 'bg-emerald-500/5 border-emerald-500/10' },
+              { icon: <Database className="h-3.5 w-3.5" />, label: 'BIP39 Words', value: '2,048', accent: 'text-cyan-400', bgAccent: 'bg-cyan-500/5 border-cyan-500/10' },
+              { icon: <Cpu className="h-3.5 w-3.5" />, label: 'Derivation Paths', value: '9', accent: 'text-teal-400', bgAccent: 'bg-teal-500/5 border-teal-500/10' },
+              { icon: <Lock className="h-3.5 w-3.5" />, label: 'Data Stored', value: 'None', accent: 'text-amber-400', bgAccent: 'bg-amber-500/5 border-amber-500/10' },
             ].map((stat) => (
-              <div key={stat.label} className="flex items-center gap-2.5 bg-zinc-900/30 border border-zinc-800/40 rounded-lg px-3 py-2.5">
-                <div className="text-zinc-500">{stat.icon}</div>
+              <div key={stat.label} className={`flex items-center gap-2.5 ${stat.bgAccent} border rounded-lg px-3 py-2.5 transition-all duration-200 hover:scale-[1.02]`}>
+                <div className={stat.accent}>{stat.icon}</div>
                 <div>
                   <p className="text-xs font-semibold text-zinc-300">{stat.value}</p>
                   <p className="text-[9px] text-zinc-600 uppercase tracking-wider">{stat.label}</p>
                 </div>
               </div>
             ))}
+          </div>
+        </motion.section>
+
+        <Separator className="bg-zinc-800/40" />
+
+        {/* ── Supported Wallets ── */}
+        <motion.section
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.6 }}
+        >
+          <div className="flex items-center gap-2 mb-2">
+            <Wallet className="h-3.5 w-3.5 text-zinc-500" />
+            <span className="text-[10px] text-zinc-600 uppercase tracking-wider font-medium">Compatible Wallets</span>
+            <TooltipProvider delayDuration={300}>
+              <Tooltip>
+                <TooltipTrigger>
+                  <Info className="h-2.5 w-2.5 text-zinc-700" />
+                </TooltipTrigger>
+                <TooltipContent side="top" className="text-xs max-w-xs">
+                  These are popular wallets that use standard derivation paths. Your wallet may still be supported even if not listed.
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
+          <div className="flex items-center gap-2 overflow-x-auto pb-1.5 scrollbar-thin">
+            {SUPPORTED_WALLETS[blockchain].map((wallet) => (
+              <span
+                key={wallet.name}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-800/40 border border-zinc-700/40 text-[10px] text-zinc-400 whitespace-nowrap hover:border-emerald-500/30 hover:bg-emerald-500/5 hover:text-zinc-300 transition-all duration-200 cursor-default group"
+              >
+                <span className="text-sm group-hover:scale-110 transition-transform">{wallet.icon}</span>
+                {wallet.name}
+              </span>
+            ))}
+            <span className="text-[9px] text-zinc-600 ml-1 whitespace-nowrap italic">+more</span>
           </div>
         </motion.section>
 
@@ -1208,7 +1499,11 @@ export default function Home() {
             >
               {/* ── Seed Phrase Input ── */}
               <Card className={`bg-zinc-900/40 border-zinc-800/50 overflow-hidden transition-all duration-500 ${
-                allWordsValid && validWordCount === wordCount ? 'border-emerald-500/30 shadow-[0_0_15px_rgba(16,185,129,0.1)]' : ''
+                isRunning
+                  ? 'recovery-gradient-border'
+                  : allWordsValid && validWordCount === wordCount
+                    ? 'border-emerald-500/30 shadow-[0_0_15px_rgba(16,185,129,0.1)]'
+                    : ''
               }`}>
                 <CardHeader className="pb-3">
                   <div className="flex items-center gap-2">
@@ -1314,6 +1609,46 @@ export default function Home() {
                       </span>
                     </motion.p>
                   )}
+                  {/* ── Seed Phrase Strength Analyzer ── */}
+                  <motion.div
+                    initial={{ opacity: 0, y: 5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className="mt-3"
+                  >
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-[10px] font-medium text-zinc-500 flex items-center gap-1">
+                        <Gauge className="h-3 w-3" />
+                        Recovery Strength
+                      </span>
+                      <span className={`text-[10px] font-bold ${
+                        strengthInfo.color === 'red' ? 'text-red-400' :
+                        strengthInfo.color === 'amber' ? 'text-amber-400' :
+                        'text-emerald-400'
+                      }`}>
+                        {strengthInfo.label}
+                      </span>
+                    </div>
+                    <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                      <motion.div
+                        initial={{ width: 0 }}
+                        animate={{ width: `${strengthInfo.pct}%` }}
+                        transition={{ duration: 0.5, ease: 'easeOut' }}
+                        className={`h-full rounded-full ${
+                          strengthInfo.color === 'red' ? 'bg-red-500' :
+                          strengthInfo.color === 'amber' ? 'bg-amber-500' :
+                          'bg-emerald-500'
+                        }`}
+                      />
+                    </div>
+                    <p className={`text-[9px] mt-1 ${
+                      strengthInfo.color === 'red' ? 'text-red-400/60' :
+                      strengthInfo.color === 'amber' ? 'text-amber-400/60' :
+                      'text-emerald-400/60'
+                    }`}>
+                      {strengthInfo.description}
+                    </p>
+                  </motion.div>
                 </CardContent>
               </Card>
 
@@ -1338,7 +1673,7 @@ export default function Home() {
                             onClick={() => handleBlockchainChange(key)}
                             className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all duration-200 cursor-pointer relative overflow-hidden group ${
                               blockchain === key
-                                ? config.accentBg + ' ' + config.accent
+                                ? config.accentBg + ' ' + config.accent + ' blockchain-shimmer'
                                 : 'border-zinc-800/60 bg-zinc-900/30 text-zinc-500 hover:border-zinc-700 hover:bg-zinc-900/50'
                             }`}
                           >
@@ -1351,6 +1686,14 @@ export default function Home() {
                                   key === 'sol' ? 'from-cyan-500/5' :
                                   'from-teal-500/5'
                                 } to-transparent`}
+                                style={{
+                                  backgroundImage: `linear-gradient(90deg, transparent 0%, ${
+                                    key === 'btc' ? 'rgba(249,115,22,0.06)' :
+                                    key === 'eth' ? 'rgba(16,185,129,0.06)' :
+                                    key === 'sol' ? 'rgba(6,182,212,0.06)' :
+                                    'rgba(20,184,166,0.06)'
+                                  } 50%, transparent 100%)`,
+                                }}
                               />
                             )}
                             <span className="text-xl relative z-10">{config.icon}</span>
@@ -1463,6 +1806,81 @@ export default function Home() {
                       <ArrowRight className="h-2.5 w-2.5" />
                       {BLOCKCHAIN_CONFIG[blockchain].hint}
                     </p>
+
+                    {/* Multi-address verification */}
+                    {!isRunning && (
+                      <div className="mt-2">
+                        <button
+                          onClick={() => setAdditionalAddresses(prev => [...prev, ''])}
+                          className="text-[10px] text-cyan-400/80 hover:text-cyan-300 flex items-center gap-1 transition-colors"
+                        >
+                          <Plus className="h-3 w-3" />
+                          Add another address
+                        </button>
+                        {additionalAddresses.length > 0 && (
+                          <p className="text-[9px] text-zinc-600 mt-1">
+                            Will match against any of the provided addresses
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    {additionalAddresses.map((addr, idx) => (
+                      <div key={idx} className="mt-2 flex items-center gap-2">
+                        <Input
+                          value={addr}
+                          onChange={(e) => {
+                            const next = [...additionalAddresses]
+                            next[idx] = e.target.value
+                            setAdditionalAddresses(next)
+                          }}
+                          placeholder={`Additional address ${idx + 2}...`}
+                          disabled={isRunning}
+                          className="h-9 bg-zinc-900/80 border-zinc-800 text-zinc-100 placeholder:text-zinc-600 font-mono text-xs focus:border-emerald-500/50 focus:ring-emerald-500/20"
+                        />
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-9 w-9 shrink-0 text-zinc-600 hover:text-red-400 hover:bg-red-500/10"
+                          onClick={() => {
+                            setAdditionalAddresses(prev => prev.filter((_, i) => i !== idx))
+                          }}
+                        >
+                          <XIcon className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Priority Mode (Checksum First) */}
+                  <div className="flex items-center gap-3 bg-zinc-800/20 rounded-lg px-3 py-2.5 border border-zinc-800/40">
+                    <Switch
+                      id="checksum-first"
+                      checked={checksumFirst}
+                      onCheckedChange={setChecksumFirst}
+                      disabled={isRunning}
+                      className="scale-90"
+                    />
+                    <div className="flex-1">
+                      <Label htmlFor="checksum-first" className="text-xs font-medium text-zinc-300 cursor-pointer">
+                        Checksum First Mode
+                      </Label>
+                      <p className="text-[10px] text-zinc-600 mt-0.5">
+                        {checksumFirst
+                          ? 'Two-phase: validate BIP39 checksums first, then derive addresses only for valid ones'
+                          : 'Normal: validate checksum + derive address in same pass'}
+                      </p>
+                    </div>
+                    <TooltipProvider delayDuration={300}>
+                      <Tooltip>
+                        <TooltipTrigger>
+                          <Info className="h-3 w-3 text-zinc-600" />
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs text-xs">
+                          <p className="font-semibold text-zinc-200">Checksum First Mode</p>
+                          <p>Uses a two-phase approach: first rapidly validates all BIP39 checksums in the batch (eliminating ~93.75% of candidates), then only derives addresses for valid combinations. This can be faster for large searches since address derivation is the slowest step.</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                   </div>
                 </CardContent>
               </Card>
@@ -1568,7 +1986,7 @@ export default function Home() {
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -20 }}
                   >
-                    <Card className="bg-zinc-900/40 border-zinc-800/50 overflow-hidden relative">
+                    <Card className="bg-zinc-900/40 border-zinc-800/50 overflow-hidden relative pulse-ring">
                       <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-emerald-500 via-cyan-500 to-teal-500 animate-pulse" />
                       <CardHeader className="pb-2">
                         <div className="flex items-center gap-2">
@@ -1788,22 +2206,153 @@ export default function Home() {
                             The recovery search completed but no matching address was found.
                           </CardDescription>
                         </CardHeader>
-                        <CardContent className="pt-0">
-                          <div className="bg-zinc-800/30 rounded-lg p-4 space-y-2">
-                            <p className="text-xs text-zinc-400">This could mean:</p>
-                            <ul className="text-xs text-zinc-500 space-y-1 list-disc list-inside">
-                              <li>One or more known words are incorrect</li>
-                              <li>The wallet address belongs to a different seed phrase</li>
-                              <li>The selected blockchain or derivation path is incorrect</li>
-                              <li>The unknown words are beyond the search scope</li>
-                            </ul>
+                        <CardContent className="pt-0 space-y-4">
+                          {/* Visual illustration */}
+                          <div className="relative flex items-center justify-center py-4">
+                            <div className="relative">
+                              <div className="flex items-center gap-3 opacity-30">
+                                <Key className="h-8 w-8 text-amber-400" />
+                                <ArrowRight className="h-4 w-4 text-zinc-600" />
+                                <div className="h-8 w-12 border border-dashed border-zinc-600 rounded-md" />
+                                <ArrowRight className="h-4 w-4 text-zinc-600" />
+                                <Search className="h-8 w-8 text-zinc-500" />
+                              </div>
+                              <div className="absolute -top-1 -right-1">
+                                <XCircle className="h-5 w-5 text-amber-500/60" />
+                              </div>
+                            </div>
                           </div>
+                          {/* Detailed suggestions with icons */}
+                          <div className="space-y-2">
+                            <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold">Suggestions</p>
+                            {[
+                              { icon: <Route className="h-3.5 w-3.5 text-cyan-400" />, text: 'Try a different derivation path', desc: 'Your wallet may use a non-standard path' },
+                              { icon: <RefreshCw className="h-3.5 w-3.5 text-emerald-400" />, text: 'Enable auto-retry all paths', desc: 'Automatically searches all derivation paths' },
+                              { icon: <AlertTriangle className="h-3.5 w-3.5 text-amber-400" />, text: 'Double-check known words', desc: 'Even one wrong word will prevent a match' },
+                              { icon: <Globe className="h-3.5 w-3.5 text-teal-400" />, text: 'Verify the blockchain network', desc: 'Ensure you selected the correct blockchain' },
+                            ].map((suggestion, idx) => (
+                              <div key={idx} className="flex items-start gap-2.5 bg-zinc-800/30 rounded-lg p-2.5 border border-zinc-800/40">
+                                <div className="mt-0.5 shrink-0">{suggestion.icon}</div>
+                                <div>
+                                  <p className="text-xs text-zinc-300 font-medium">{suggestion.text}</p>
+                                  <p className="text-[10px] text-zinc-500">{suggestion.desc}</p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                          {/* Try Different Path button */}
+                          {BLOCKCHAIN_CONFIG[blockchain].paths.length > 1 && !autoRetry && (
+                            <Button
+                              onClick={() => {
+                                setAutoRetry(true)
+                                handleReset()
+                              }}
+                              variant="outline"
+                              className="w-full h-10 border-cyan-500/30 bg-cyan-500/5 text-cyan-400 hover:bg-cyan-500/10 hover:text-cyan-300 font-semibold text-sm rounded-xl"
+                            >
+                              <RefreshCw className="h-4 w-4 mr-2" />
+                              Try All Paths (Auto-Retry)
+                            </Button>
+                          )}
+                          {/* Progress info */}
+                          {jobStatus && (
+                            <div className="flex items-center gap-4 text-[10px] text-zinc-500 bg-zinc-800/20 rounded-lg px-3 py-2 border border-zinc-800/30">
+                              <span className="flex items-center gap-1">
+                                <Search className="h-2.5 w-2.5" />
+                                {formatNumber(jobStatus.progress)} combinations checked
+                              </span>
+                              <span className="flex items-center gap-1">
+                                <Zap className="h-2.5 w-2.5" />
+                                Avg {formatNumber(Math.round(jobStatus.speed))}/s
+                              </span>
+                            </div>
+                          )}
                         </CardContent>
                       </Card>
                     )}
                   </motion.section>
                 )}
               </AnimatePresence>
+
+              {/* ── Recovery Complete Summary Card ── */}
+              {(isCompleted || isStopped) && jobStatus && (
+                <motion.div
+                  initial={{ opacity: 0, y: 15 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3, delay: 0.2 }}
+                >
+                  <Card className="bg-zinc-900/40 border-zinc-800/50">
+                    <CardHeader className="pb-2">
+                      <div className="flex items-center gap-2">
+                        <Gauge className="h-4 w-4 text-zinc-400" />
+                        <CardTitle className="text-sm font-semibold text-zinc-300">Recovery Summary</CardTitle>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="pt-0">
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        <div className="bg-zinc-800/30 rounded-lg p-2.5 text-center border border-zinc-800/40">
+                          <div className="flex items-center justify-center gap-1 text-[9px] text-zinc-500 uppercase tracking-wider mb-0.5">
+                            <Clock className="h-2.5 w-2.5" />
+                            Time
+                          </div>
+                          <p className="text-xs font-semibold text-zinc-200">{
+                            jobStatus.startedAt
+                              ? formatTime(
+                                  jobStatus.foundAt
+                                    ? (jobStatus.foundAt - jobStatus.startedAt) / 1000
+                                    : isStopped
+                                      ? liveElapsedSeconds || 0
+                                      : (Date.now() - jobStatus.startedAt) / 1000
+                                )
+                              : '—'
+                          }</p>
+                        </div>
+                        <div className="bg-zinc-800/30 rounded-lg p-2.5 text-center border border-zinc-800/40">
+                          <div className="flex items-center justify-center gap-1 text-[9px] text-zinc-500 uppercase tracking-wider mb-0.5">
+                            <Search className="h-2.5 w-2.5" />
+                            Checked
+                          </div>
+                          <p className="text-xs font-semibold text-zinc-200">{formatNumber(jobStatus.progress)}</p>
+                        </div>
+                        <div className="bg-zinc-800/30 rounded-lg p-2.5 text-center border border-zinc-800/40">
+                          <div className="flex items-center justify-center gap-1 text-[9px] text-zinc-500 uppercase tracking-wider mb-0.5">
+                            <Zap className="h-2.5 w-2.5" />
+                            Avg Speed
+                          </div>
+                          <p className="text-xs font-semibold text-zinc-200">{formatNumber(Math.round(jobStatus.speed))}/s</p>
+                        </div>
+                        <div className="bg-zinc-800/30 rounded-lg p-2.5 text-center border border-zinc-800/40">
+                          <div className="flex items-center justify-center gap-1 text-[9px] text-zinc-500 uppercase tracking-wider mb-0.5">
+                            <Route className="h-2.5 w-2.5" />
+                            Path(s)
+                          </div>
+                          <p className="text-xs font-semibold text-zinc-200">{
+                            jobStatus.triedPaths && jobStatus.triedPaths.length > 0
+                              ? `${jobStatus.triedPaths.length + 1}`
+                              : '1'
+                          }</p>
+                        </div>
+                      </div>
+                      {/* Paths tried detail */}
+                      {jobStatus.triedPaths && jobStatus.triedPaths.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-2">
+                          {jobStatus.triedPaths.map((triedPath) => {
+                            const pathInfo = BLOCKCHAIN_CONFIG[jobStatus.blockchain]?.paths?.find(p => p.path === triedPath)
+                            return (
+                              <span key={triedPath} className="text-[8px] text-amber-400/60 bg-amber-500/5 border border-amber-500/10 rounded px-1.5 py-0.5">
+                                ✗ {pathInfo?.label || triedPath}
+                              </span>
+                            )
+                          })}
+                          <span className="text-[8px] text-zinc-500 bg-zinc-800/30 border border-zinc-800/40 rounded px-1.5 py-0.5">
+                            {BLOCKCHAIN_CONFIG[jobStatus.blockchain]?.paths?.find(p => p.path === jobStatus.derivationPath)?.label || jobStatus.derivationPath}
+                          </span>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                </motion.div>
+              )}
 
               {/* ── Failed Display ── */}
               {isFailed && (
@@ -2142,15 +2691,55 @@ export default function Home() {
                   <div className="flex items-center gap-2">
                     <History className="h-5 w-5 text-emerald-400" />
                     <CardTitle className="text-base">Recovery History</CardTitle>
-                    {persistedHistory.length > 0 && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="ml-auto text-[9px] text-zinc-500 hover:text-red-400 h-6 px-2"
-                        onClick={handleClearPersistedHistory}
-                      >
-                        Clear All
-                      </Button>
+                    {(persistedHistory.length > 0 || jobHistory.length > 0) && (
+                      <div className="ml-auto flex items-center gap-1.5">
+                        <TooltipProvider delayDuration={300}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-[9px] text-cyan-400/80 hover:text-cyan-300 h-6 px-2 gap-1"
+                                onClick={() => handleExportHistory('json')}
+                              >
+                                <FileDown className="h-3 w-3" />
+                                Export JSON
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom" className="text-xs">
+                              Export history as JSON file
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                        <TooltipProvider delayDuration={300}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-[9px] text-cyan-400/80 hover:text-cyan-300 h-6 px-2 gap-1"
+                                onClick={() => handleExportHistory('csv')}
+                              >
+                                <FileDown className="h-3 w-3" />
+                                CSV
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom" className="text-xs">
+                              Export history as CSV file
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                        {persistedHistory.length > 0 && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-[9px] text-zinc-500 hover:text-red-400 h-6 px-2"
+                            onClick={handleClearPersistedHistory}
+                          >
+                            Clear All
+                          </Button>
+                        )}
+                      </div>
                     )}
                   </div>
                   <CardDescription className="text-xs text-zinc-500">
@@ -2285,6 +2874,56 @@ export default function Home() {
             </motion.div>
           )}
         </AnimatePresence>
+
+        {/* ── Keyboard Shortcuts Dialog ── */}
+        <Dialog open={showShortcutsDialog} onOpenChange={setShowShortcutsDialog}>
+          <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-100 sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle className="text-base font-semibold flex items-center gap-2">
+                <Command className="h-4 w-4 text-cyan-400" />
+                Keyboard Shortcuts
+              </DialogTitle>
+              <DialogDescription className="text-xs text-zinc-500">
+                Use these shortcuts for faster navigation and actions.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3 py-2">
+              {[
+                { keys: ['Ctrl', '1'], desc: 'Switch to Recovery tab' },
+                { keys: ['Ctrl', '2'], desc: 'Switch to Quick Verify tab' },
+                { keys: ['Ctrl', '3'], desc: 'Switch to History tab' },
+                { keys: ['Ctrl', 'Enter'], desc: 'Start recovery (Recovery tab)' },
+                { keys: ['Ctrl', 'Shift', 'V'], desc: 'Open paste dialog (Recovery tab)' },
+              ].map((shortcut) => (
+                <div key={shortcut.keys.join('+')} className="flex items-center justify-between">
+                  <span className="text-xs text-zinc-400">{shortcut.desc}</span>
+                  <div className="flex items-center gap-1">
+                    {shortcut.keys.map((key, i) => (
+                      <span key={i}>
+                        <kbd className="px-1.5 py-0.5 text-[10px] font-mono bg-zinc-800 border border-zinc-700 rounded text-zinc-300">
+                          {key}
+                        </kbd>
+                        {i < shortcut.keys.length - 1 && (
+                          <span className="text-zinc-600 mx-0.5">+</span>
+                        )}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <DialogFooter>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-zinc-400 hover:text-zinc-300"
+                onClick={() => setShowShortcutsDialog(false)}
+              >
+                Got it
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* ── Paste Seed Phrase Dialog ── */}
         <Dialog open={showPasteDialog} onOpenChange={(open) => {
@@ -2439,36 +3078,67 @@ export default function Home() {
       </main>
 
       {/* ── Footer ── */}
-      <footer className="mt-auto border-t border-zinc-800/40 bg-zinc-950/80">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 py-4">
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <Shield className="h-3.5 w-3.5 text-zinc-700" />
-              <span className="text-[10px] text-zinc-600">
-                &copy; {new Date().getFullYear()} CryptoRecover
-              </span>
-              <Badge variant="outline" className="text-[8px] h-4 px-1.5 border-zinc-800 text-zinc-600">
-                v1.0.0
-              </Badge>
+      <footer className="mt-auto border-t border-zinc-800/40 bg-zinc-950/80 backdrop-blur-sm">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 py-5 space-y-4">
+          {/* Top row: Logo, security badges, links */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-2.5">
+              <div className="flex items-center justify-center h-7 w-7 rounded-md bg-gradient-to-br from-emerald-500/15 to-cyan-500/15 border border-emerald-500/20">
+                <Shield className="h-3.5 w-3.5 text-emerald-400/80" />
+              </div>
+              <div>
+                <span className="text-[11px] font-semibold text-zinc-400">
+                  Crypto<span className="text-emerald-400/70">Recover</span>
+                </span>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <Badge variant="outline" className="text-[7px] h-3.5 px-1.5 border-emerald-500/20 text-emerald-500/60 bg-emerald-500/5">
+                    v2.0
+                  </Badge>
+                  <span className="text-[8px] text-zinc-700">
+                    &copy; {new Date().getFullYear()}
+                  </span>
+                </div>
+              </div>
             </div>
+            {/* Security badges */}
+            <div className="flex items-center gap-1.5 flex-wrap justify-center">
+              {[
+                { icon: <Server className="h-2.5 w-2.5" />, label: 'No Server Storage', color: 'emerald' },
+                { icon: <Lock className="h-2.5 w-2.5" />, label: 'In-Memory Only', color: 'cyan' },
+                { icon: <BookOpen className="h-2.5 w-2.5" />, label: 'Open Source', color: 'teal' },
+                { icon: <Shield className="h-2.5 w-2.5" />, label: 'Self-Recovery Only', color: 'amber' },
+              ].map((badge) => (
+                <span
+                  key={badge.label}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-${badge.color}-500/5 border border-${badge.color}-500/15 text-[8px] text-${badge.color}-400/70 hover:bg-${badge.color}-500/10 transition-colors duration-200`}
+                >
+                  {badge.icon}
+                  {badge.label}
+                </span>
+              ))}
+            </div>
+            {/* External links */}
             <div className="flex items-center gap-3">
               <span className="text-[9px] text-zinc-600 hover:text-zinc-400 cursor-default transition-colors flex items-center gap-1">
-                <Lock className="h-2.5 w-2.5" />
-                End-to-end Secure
+                <Github className="h-3 w-3" />
+                Contribute
               </span>
-              <span className="text-[9px] text-zinc-700">|</span>
-              <span className="text-[9px] text-zinc-600 hover:text-zinc-400 cursor-default transition-colors flex items-center gap-1">
-                <Shield className="h-2.5 w-2.5" />
-                Own-Wallet Only
-              </span>
-              <span className="text-[9px] text-zinc-700">|</span>
+              <span className="text-[9px] text-zinc-800">|</span>
               <span className="text-[9px] text-zinc-600 hover:text-zinc-400 cursor-default transition-colors flex items-center gap-1">
                 <ExternalLink className="h-2.5 w-2.5" />
-                BIP39 Standard
+                BIP39 Spec
               </span>
             </div>
-            <p className="text-[9px] text-zinc-700 text-center sm:text-right">
-              No data stored after session ends
+          </div>
+          {/* Bottom row: Disclaimer */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-2 pt-3 border-t border-zinc-800/20">
+            <p className="text-[9px] text-amber-500/40 text-center sm:text-left flex items-center gap-1">
+              <Shield className="h-2.5 w-2.5" />
+              Built for legitimate self-recovery only. Requires proof of wallet ownership via known address.
+            </p>
+            <p className="text-[9px] text-zinc-800 text-center sm:text-right flex items-center gap-1">
+              <span className="inline-block h-1 w-1 rounded-full bg-emerald-500/30" />
+              All data purged after session ends
             </p>
           </div>
         </div>
