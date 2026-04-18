@@ -11,11 +11,42 @@ import { v4 as uuidv4 } from 'uuid';
 
 export type Blockchain = 'btc' | 'eth' | 'sol' | 'xrp';
 
+export interface DerivationPath {
+  label: string;
+  path: string;
+  blockchain: Blockchain;
+}
+
+export const DERIVATION_PATHS: DerivationPath[] = [
+  { label: 'Ethereum (Standard)', path: "m/44'/60'/0'/0/0", blockchain: 'eth' },
+  { label: 'Ethereum (Ledger)', path: "m/44'/60'/0'/0/0", blockchain: 'eth' },
+  { label: 'Bitcoin (Legacy P2PKH)', path: "m/44'/0'/0'/0/0", blockchain: 'btc' },
+  { label: 'Bitcoin (SegWit P2SH)', path: "m/49'/0'/0'/0/0", blockchain: 'btc' },
+  { label: 'Bitcoin (Native SegWit)', path: "m/84'/0'/0'/0/0", blockchain: 'btc' },
+  { label: 'Solana (Standard)', path: "m/44'/501'/0'/0'", blockchain: 'sol' },
+  { label: 'Solana (Phantom)', path: "m/44'/501'/0'/0'", blockchain: 'sol' },
+  { label: 'XRP (Standard)', path: "m/44'/144'/0'/0/0", blockchain: 'xrp' },
+];
+
+export function getPathsForBlockchain(blockchain: Blockchain): DerivationPath[] {
+  return DERIVATION_PATHS.filter(p => p.blockchain === blockchain);
+}
+
+export function getDefaultPath(blockchain: Blockchain): string {
+  switch (blockchain) {
+    case 'eth': return "m/44'/60'/0'/0/0";
+    case 'btc': return "m/44'/0'/0'/0/0";
+    case 'sol': return "m/44'/501'/0'/0'";
+    case 'xrp': return "m/44'/144'/0'/0/0";
+  }
+}
+
 export interface RecoveryJob {
   id: string;
   partialMnemonic: (string | null)[];
   knownAddress: string;
   blockchain: Blockchain;
+  derivationPath: string;
   status: 'pending' | 'running' | 'completed' | 'failed' | 'stopped';
   progress: number;
   total: number;
@@ -79,17 +110,17 @@ export function getWordlist(): string[] {
 
 // ─── Address derivation ──────────────────────────────────────────────────────
 
-async function deriveETHAddress(mnemonic: string): Promise<string> {
+async function deriveETHAddress(mnemonic: string, path: string): Promise<string> {
   const seed = await bip39.mnemonicToSeed(mnemonic);
   const hdNode = HDNodeWallet.fromSeed(seed);
-  const child = hdNode.derivePath("m/44'/60'/0'/0/0");
+  const child = hdNode.derivePath(path);
   return child.address;
 }
 
-async function deriveBTCAddress(mnemonic: string): Promise<string> {
+async function deriveBTCAddress(mnemonic: string, path: string): Promise<string> {
   const seed = await bip39.mnemonicToSeed(mnemonic);
   const hdNode = HDNodeWallet.fromSeed(seed);
-  const child = hdNode.derivePath("m/44'/0'/0'/0/0");
+  const child = hdNode.derivePath(path);
 
   // Get uncompressed public key (remove 0x04 prefix byte)
   const uncompressedHex = child.signingKey.publicKey;
@@ -98,8 +129,21 @@ async function deriveBTCAddress(mnemonic: string): Promise<string> {
   // Hash160: SHA256 then RIPEMD160
   const h160 = hash160(pubKeyBytes);
 
-  // Add version byte 0x00 for mainnet P2PKH
-  const versionedPayload = Buffer.concat([Buffer.from([0x00]), h160]);
+  // Determine version byte based on path
+  let versionByte: number;
+  if (path.startsWith("m/84'")) {
+    // Native SegWit - use version 0x00 for now (simplified)
+    versionByte = 0x00;
+  } else if (path.startsWith("m/49'")) {
+    // P2SH-SegWit - version 0x05
+    versionByte = 0x05;
+  } else {
+    // Legacy P2PKH - version 0x00
+    versionByte = 0x00;
+  }
+
+  // Add version byte
+  const versionedPayload = Buffer.concat([Buffer.from([versionByte]), h160]);
 
   // Calculate checksum: double SHA256, first 4 bytes
   const checksum = doubleSha256(versionedPayload).slice(0, 4);
@@ -111,7 +155,7 @@ async function deriveBTCAddress(mnemonic: string): Promise<string> {
   return base58Encode(addressBytes, BTC_BASE58_ALPHABET);
 }
 
-async function deriveSOLAddress(mnemonic: string): Promise<string> {
+async function deriveSOLAddress(mnemonic: string, _path: string): Promise<string> {
   const seed = await bip39.mnemonicToSeed(mnemonic);
   const seedHex = seed.toString('hex');
   const { key } = ed25519DerivePath("m/44'/501'/0'/0'", seedHex);
@@ -119,10 +163,10 @@ async function deriveSOLAddress(mnemonic: string): Promise<string> {
   return bs58.encode(Buffer.from(keypair.publicKey));
 }
 
-async function deriveXRPAddress(mnemonic: string): Promise<string> {
+async function deriveXRPAddress(mnemonic: string, path: string): Promise<string> {
   const seed = await bip39.mnemonicToSeed(mnemonic);
   const hdNode = HDNodeWallet.fromSeed(seed);
-  const child = hdNode.derivePath("m/44'/144'/0'/0/0");
+  const child = hdNode.derivePath(path);
 
   // Get uncompressed public key (remove 0x04 prefix byte)
   const uncompressedHex = child.signingKey.publicKey;
@@ -144,27 +188,53 @@ async function deriveXRPAddress(mnemonic: string): Promise<string> {
   return base58Encode(addressBytes, XRP_BASE58_ALPHABET);
 }
 
-export async function deriveAddress(mnemonic: string, blockchain: Blockchain): Promise<string> {
+export async function deriveAddress(mnemonic: string, blockchain: Blockchain, derivationPath?: string): Promise<string> {
+  const path = derivationPath || getDefaultPath(blockchain);
   switch (blockchain) {
     case 'eth':
-      return deriveETHAddress(mnemonic);
+      return deriveETHAddress(mnemonic, path);
     case 'btc':
-      return deriveBTCAddress(mnemonic);
+      return deriveBTCAddress(mnemonic, path);
     case 'sol':
-      return deriveSOLAddress(mnemonic);
+      return deriveSOLAddress(mnemonic, path);
     case 'xrp':
-      return deriveXRPAddress(mnemonic);
+      return deriveXRPAddress(mnemonic, path);
     default:
       throw new Error(`Unsupported blockchain: ${blockchain}`);
   }
 }
 
+// ─── Quick Verify ────────────────────────────────────────────────────────────
+
+export interface VerifyResult {
+  valid: boolean;
+  address: string | null;
+  match: boolean;
+  error?: string;
+}
+
+export async function verifyMnemonic(
+  mnemonic: string,
+  knownAddress: string,
+  blockchain: Blockchain,
+  derivationPath?: string
+): Promise<VerifyResult> {
+  // Validate mnemonic format
+  if (!bip39.validateMnemonic(mnemonic)) {
+    return { valid: false, address: null, match: false, error: 'Invalid mnemonic checksum' };
+  }
+
+  try {
+    const address = await deriveAddress(mnemonic, blockchain, derivationPath);
+    const match = compareAddresses(address, knownAddress, blockchain);
+    return { valid: true, address, match };
+  } catch (err) {
+    return { valid: true, address: null, match: false, error: String(err) };
+  }
+}
+
 // ─── Combination generation ──────────────────────────────────────────────────
 
-/**
- * Converts a flat counter into an array of indices for each unknown position.
- * This is essentially converting the counter to base-{wordlist.length} digits.
- */
 function counterToIndices(
   counter: number,
   unknownCount: number,
@@ -179,10 +249,6 @@ function counterToIndices(
   return indices;
 }
 
-/**
- * Builds a candidate mnemonic from the partial mnemonic and a set of
- * word indices for the unknown positions.
- */
 function buildCandidate(
   partialMnemonic: (string | null)[],
   unknownPositions: number[],
@@ -196,12 +262,26 @@ function buildCandidate(
   return words.join(' ');
 }
 
+// ─── Estimate helpers ────────────────────────────────────────────────────────
+
+export function estimateTotalCombinations(unknownCount: number): number {
+  return Math.pow(2048, unknownCount);
+}
+
+export function estimateTime(unknownCount: number, speedPerSec: number = 1000): number {
+  const total = estimateTotalCombinations(unknownCount);
+  // After BIP39 checksum pre-filter, only ~6.25% of candidates are valid
+  // But we still need to check them all to find the valid ones
+  return total / speedPerSec;
+}
+
 // ─── Job management ──────────────────────────────────────────────────────────
 
 export function createJob(
   partialMnemonic: (string | null)[],
   knownAddress: string,
-  blockchain: Blockchain
+  blockchain: Blockchain,
+  derivationPath?: string
 ): RecoveryJob {
   const wordlist = getWordlist();
   const unknownPositions = partialMnemonic.reduce((acc, word, i) => {
@@ -211,12 +291,14 @@ export function createJob(
 
   const unknownCount = unknownPositions.length;
   const total = Math.pow(wordlist.length, unknownCount);
+  const path = derivationPath || getDefaultPath(blockchain);
 
   const job: RecoveryJob = {
     id: uuidv4(),
     partialMnemonic,
     knownAddress,
     blockchain,
+    derivationPath: path,
     status: 'pending',
     progress: 0,
     total,
@@ -279,7 +361,7 @@ export function startRecovery(job: RecoveryJob): void {
     (async () => {
       try {
         if (bip39.validateMnemonic(mnemonic)) {
-          const address = await deriveAddress(mnemonic, job.blockchain);
+          const address = await deriveAddress(mnemonic, job.blockchain, job.derivationPath);
           const match = compareAddresses(address, job.knownAddress, job.blockchain);
           if (match) {
             job.result = [mnemonic];
@@ -338,7 +420,7 @@ export function startRecovery(job: RecoveryJob): void {
               return null;
             }
             // Derive address and compare
-            const address = await deriveAddress(mnemonic, job.blockchain);
+            const address = await deriveAddress(mnemonic, job.blockchain, job.derivationPath);
             if (compareAddresses(address, job.knownAddress, job.blockchain)) {
               return mnemonic;
             }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   createJob,
   getJob,
+  getAllJobs,
   startRecovery,
   stopRecovery,
   type Blockchain,
@@ -13,10 +14,11 @@ export const runtime = 'nodejs';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { partialMnemonic, knownAddress, blockchain } = body as {
+    const { partialMnemonic, knownAddress, blockchain, derivationPath } = body as {
       partialMnemonic: (string | null)[];
       knownAddress: string;
       blockchain: Blockchain;
+      derivationPath?: string;
     };
 
     // Validate inputs
@@ -75,7 +77,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Create and start the job
-    const job = createJob(partialMnemonic, knownAddress.trim(), blockchain);
+    const job = createJob(partialMnemonic, knownAddress.trim(), blockchain, derivationPath);
     startRecovery(job);
 
     return NextResponse.json({ jobId: job.id });
@@ -88,17 +90,16 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// GET /api/recover?jobId=xxx - Get job status
+// GET /api/recover?jobId=xxx - Get job status (or all jobs if no jobId)
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const jobId = searchParams.get('jobId');
 
     if (!jobId) {
-      return NextResponse.json(
-        { error: 'jobId query parameter is required' },
-        { status: 400 }
-      );
+      // Return all jobs
+      const allJobs = getAllJobs();
+      return NextResponse.json({ jobs: allJobs });
     }
 
     const job = getJob(jobId);
