@@ -4,6 +4,7 @@ import {
   getJob,
   getAllJobs,
   startRecovery,
+  startMultiPathRecovery,
   stopRecovery,
   type Blockchain,
 } from '@/lib/crypto-recovery';
@@ -29,9 +30,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (partialMnemonic.length !== 12) {
+    if (partialMnemonic.length !== 12 && partialMnemonic.length !== 24) {
       return NextResponse.json(
-        { error: 'partialMnemonic must have exactly 12 elements' },
+        { error: 'partialMnemonic must have exactly 12 or 24 elements' },
         { status: 400 }
       );
     }
@@ -67,18 +68,28 @@ export async function POST(request: NextRequest) {
 
     // Validate known words are in BIP39 wordlist
     const knownWordCount = partialMnemonic.filter((w) => w !== null).length;
-    if (knownWordCount < 8) {
+    const minRequired = partialMnemonic.length === 24 ? 16 : 8;
+    if (knownWordCount < minRequired) {
       return NextResponse.json(
         {
-          error: `At least 8 known words are required. You provided ${knownWordCount}.`,
+          error: `At least ${minRequired} known words are required for ${partialMnemonic.length}-word phrases. You provided ${knownWordCount}.`,
         },
         { status: 400 }
       );
     }
 
+    // Check for autoRetry query parameter
+    const { searchParams } = new URL(request.url);
+    const autoRetry = searchParams.get('autoRetry') === 'true';
+
     // Create and start the job
-    const job = createJob(partialMnemonic, knownAddress.trim(), blockchain, derivationPath);
-    startRecovery(job);
+    const job = createJob(partialMnemonic, knownAddress.trim(), blockchain, derivationPath, autoRetry);
+
+    if (autoRetry) {
+      startMultiPathRecovery(job);
+    } else {
+      startRecovery(job);
+    }
 
     return NextResponse.json({ jobId: job.id });
   } catch (err) {

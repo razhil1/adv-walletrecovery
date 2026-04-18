@@ -62,9 +62,21 @@ import {
   ExternalLink,
   Eye as EyeIcon,
   MapPin,
+  ClipboardPaste,
+  TrendingUp,
+  BarChart3,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { motion, AnimatePresence } from 'framer-motion'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Textarea } from '@/components/ui/textarea'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -84,6 +96,11 @@ interface RecoveryJob {
   result: string[] | null
   startedAt: number | null
   foundAt: number | null
+  currentPathIndex?: number
+  triedPaths?: string[]
+  pathSwitchAt?: number
+  autoRetry?: boolean
+  validCombinationsEstimate?: number
 }
 
 interface VerifyResult {
@@ -474,6 +491,22 @@ export default function Home() {
   // Confetti state
   const [showConfetti, setShowConfetti] = useState(false)
 
+  // Paste dialog state
+  const [showPasteDialog, setShowPasteDialog] = useState(false)
+  const [pasteText, setPasteText] = useState('')
+
+  // Auto-retry state
+  const [autoRetry, setAutoRetry] = useState(true)
+
+  // Live elapsed timer state
+  const [liveElapsedSeconds, setLiveElapsedSeconds] = useState(0)
+
+  // Searching dots animation state
+  const [searchingDots, setSearchingDots] = useState(0)
+
+  // Track previous path index for path switch notification
+  const prevPathIndexRef = useRef<number | undefined>(undefined)
+
   // Results ref for auto-scroll
   const resultsRef = useRef<HTMLDivElement>(null)
 
@@ -601,6 +634,46 @@ export default function Home() {
       }, 300)
     }
   }, [isCompleted, jobStatus])
+
+  // ── Live elapsed timer ──
+  useEffect(() => {
+    if (isRunning && jobStatus?.startedAt) {
+      const interval = setInterval(() => {
+        setLiveElapsedSeconds((Date.now() - jobStatus.startedAt!) / 1000)
+      }, 1000)
+      return () => clearInterval(interval)
+    } else {
+      setLiveElapsedSeconds(elapsedSeconds)
+    }
+  }, [isRunning, jobStatus?.startedAt, elapsedSeconds])
+
+  // ── Searching dots animation ──
+  useEffect(() => {
+    if (isRunning) {
+      const interval = setInterval(() => {
+        setSearchingDots((d) => (d + 1) % 4)
+      }, 500)
+      return () => clearInterval(interval)
+    }
+    setSearchingDots(0)
+  }, [isRunning])
+
+  // ── Path switch toast notification ──
+  useEffect(() => {
+    if (jobStatus?.autoRetry && jobStatus.currentPathIndex !== undefined && isRunning) {
+      if (prevPathIndexRef.current !== undefined && prevPathIndexRef.current !== jobStatus.currentPathIndex) {
+        const paths = BLOCKCHAIN_CONFIG[jobStatus.blockchain]?.paths || []
+        const prevPath = paths[prevPathIndexRef.current]
+        const nextPath = paths[jobStatus.currentPathIndex]
+        if (prevPath && nextPath) {
+          toast.info(`No match on ${prevPath.label}, trying ${nextPath.label}...`, {
+            description: `Switching derivation path (${jobStatus.currentPathIndex + 1} of ${paths.length})`,
+          })
+        }
+      }
+      prevPathIndexRef.current = jobStatus.currentPathIndex
+    }
+  }, [jobStatus?.currentPathIndex, jobStatus?.autoRetry, jobStatus?.blockchain, isRunning])
 
   // Check if all words are valid BIP39 words
   const allWordsValid = useMemo(() => {
@@ -743,7 +816,8 @@ export default function Home() {
 
     setIsStarting(true)
     try {
-      const res = await fetch('/api/recover', {
+      const autoRetryParam = autoRetry && BLOCKCHAIN_CONFIG[blockchain].paths.length > 1 ? '?autoRetry=true' : ''
+      const res = await fetch(`/api/recover${autoRetryParam}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -760,8 +834,11 @@ export default function Home() {
       }
       setJobId(data.jobId)
       setJobStatus(null)
+      prevPathIndexRef.current = undefined
       toast.success('Recovery job started!', {
-        description: 'Searching for your wallet...',
+        description: autoRetry && BLOCKCHAIN_CONFIG[blockchain].paths.length > 1
+          ? 'Searching for your wallet (auto-retry enabled)...'
+          : 'Searching for your wallet...',
       })
     } catch {
       toast.error('Network error', {
@@ -797,6 +874,73 @@ export default function Home() {
     setPersistedHistory([])
     try { localStorage.removeItem(STORAGE_KEY) } catch { /* ignore */ }
     toast.success('History cleared')
+  }
+
+  const handlePasteSeedPhrase = () => {
+    if (!pasteText.trim()) {
+      toast.error('Please paste a seed phrase first')
+      return
+    }
+
+    // Parse the pasted text: split by spaces/newlines, trim, lowercase
+    const parsedWords = pasteText
+      .trim()
+      .split(/[\s\n]+/)
+      .map((w: string) => w.trim().toLowerCase())
+      .filter((w: string) => w.length > 0)
+
+    if (parsedWords.length === 0) {
+      toast.error('No words found in the pasted text')
+      return
+    }
+
+    if (parsedWords.length !== 12 && parsedWords.length !== 24) {
+      toast.error(`Expected 12 or 24 words, but found ${parsedWords.length}`, {
+        description: 'Seed phrases must be exactly 12 or 24 words.',
+      })
+      return
+    }
+
+    // Auto-switch word count if needed
+    const targetCount = parsedWords.length as 12 | 24
+    if (targetCount !== wordCount) {
+      setWordCount(targetCount)
+    }
+
+    // Fill the words array - mark non-BIP39 words as unknown (null)
+    let recognized = 0
+    let unrecognized = 0
+    const newWords: (string | null)[] = Array(targetCount).fill('')
+    const newInputValues: string[] = Array(targetCount).fill('')
+
+    for (let i = 0; i < targetCount; i++) {
+      const word = parsedWords[i] || ''
+      if (wordlist.length > 0 && wordlist.includes(word)) {
+        newWords[i] = word
+        newInputValues[i] = word
+        recognized++
+      } else if (word) {
+        // Not in BIP39 wordlist - mark as unknown
+        newWords[i] = null
+        newInputValues[i] = word
+        unrecognized++
+      }
+    }
+
+    setWords(newWords)
+    setInputValues(newInputValues)
+    setShowPasteDialog(false)
+    setPasteText('')
+
+    if (unrecognized > 0) {
+      toast.success(`Pasted ${parsedWords.length} words`, {
+        description: `${recognized} recognized, ${unrecognized} unrecognized (marked as unknown)`,
+      })
+    } else {
+      toast.success(`Pasted ${parsedWords.length} words`, {
+        description: 'All words recognized from BIP39 wordlist',
+      })
+    }
   }
 
   const handleCopyResult = () => {
@@ -948,6 +1092,7 @@ export default function Home() {
               {
                 icon: <Key className="h-5 w-5 text-emerald-400" />,
                 step: '01',
+                badge: '①',
                 title: 'Enter Partial Seed',
                 desc: 'Input your seed phrase, marking unknown words with the eye toggle.',
                 gradient: 'from-emerald-500/8 to-emerald-500/0',
@@ -956,6 +1101,7 @@ export default function Home() {
               {
                 icon: <Wallet className="h-5 w-5 text-cyan-400" />,
                 step: '02',
+                badge: '②',
                 title: 'Provide Address',
                 desc: 'Enter your known wallet address for verification against derived addresses.',
                 gradient: 'from-cyan-500/8 to-cyan-500/0',
@@ -964,6 +1110,7 @@ export default function Home() {
               {
                 icon: <FileCheck className="h-5 w-5 text-teal-400" />,
                 step: '03',
+                badge: '③',
                 title: 'Recover Wallet',
                 desc: 'We brute-force unknown words and verify against your known address.',
                 gradient: 'from-teal-500/8 to-teal-500/0',
@@ -985,7 +1132,10 @@ export default function Home() {
                     <span className="text-[9px] font-bold text-zinc-600 uppercase tracking-[0.2em]">
                       Step {item.step}
                     </span>
-                    <h3 className="font-semibold text-sm text-zinc-200">{item.title}</h3>
+                    <h3 className="font-semibold text-sm text-zinc-200 flex items-center gap-1.5">
+                      <span className="text-emerald-400/60 text-xs">{item.badge}</span>
+                      {item.title}
+                    </h3>
                     <p className="text-[11px] text-zinc-500 leading-relaxed">{item.desc}</p>
                   </CardContent>
                 </Card>
@@ -993,6 +1143,9 @@ export default function Home() {
             ))}
           </div>
         </section>
+
+        {/* ── Gradient divider between steps and content ── */}
+        <div className="h-px bg-gradient-to-r from-transparent via-emerald-500/30 to-transparent" />
 
         {/* ── Security Stats ── */}
         <motion.section
@@ -1059,6 +1212,7 @@ export default function Home() {
               }`}>
                 <CardHeader className="pb-3">
                   <div className="flex items-center gap-2">
+                    <span className="text-emerald-400/60 text-xs font-bold">①</span>
                     <Key className="h-4 w-4 text-emerald-400" />
                     <CardTitle className="text-base font-semibold">Seed Phrase</CardTitle>
                     <div className="ml-auto flex items-center gap-2">
@@ -1090,19 +1244,31 @@ export default function Home() {
                       </Badge>
                     </div>
                   </div>
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
                     <CardDescription className="text-xs text-zinc-500">
                       Enter the words you remember. Click the eye icon to mark unknown words.
                     </CardDescription>
-                    {/* Word count toggle */}
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] text-zinc-600">12</span>
-                      <Switch
-                        checked={wordCount === 24}
-                        onCheckedChange={(checked) => handleWordCountChange(checked ? 24 : 12)}
-                        className="scale-75"
-                      />
-                      <span className="text-[10px] text-zinc-600">24</span>
+                    <div className="flex items-center gap-3">
+                      {/* Paste button */}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 text-[10px] gap-1.5 text-cyan-400 hover:text-cyan-300 hover:bg-cyan-500/10 border border-cyan-500/20 px-2.5"
+                        onClick={() => setShowPasteDialog(true)}
+                      >
+                        <ClipboardPaste className="h-3 w-3" />
+                        Paste
+                      </Button>
+                      {/* Word count toggle */}
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-zinc-600">12</span>
+                        <Switch
+                          checked={wordCount === 24}
+                          onCheckedChange={(checked) => handleWordCountChange(checked ? 24 : 12)}
+                          className="scale-75"
+                        />
+                        <span className="text-[10px] text-zinc-600">24</span>
+                      </div>
                     </div>
                   </div>
                 </CardHeader>
@@ -1143,6 +1309,9 @@ export default function Home() {
                     >
                       <Timer className="h-3 w-3" />
                       Estimated search: ~{formatTime(estimatedSeconds)} ({formatNumber(Math.pow(2048, unknownCount))} combinations)
+                      <span className="text-zinc-600 ml-1">
+                        (~{formatNumber(Math.floor(Math.pow(2048, unknownCount) * 0.0625))} valid after BIP39 filter)
+                      </span>
                     </motion.p>
                   )}
                 </CardContent>
@@ -1152,6 +1321,7 @@ export default function Home() {
               <Card className="bg-zinc-900/40 border-zinc-800/50">
                 <CardHeader className="pb-3">
                   <div className="flex items-center gap-2">
+                    <span className="text-cyan-400/60 text-xs font-bold">②</span>
                     <Wallet className="h-4 w-4 text-emerald-400" />
                     <CardTitle className="text-base font-semibold">Configuration</CardTitle>
                   </div>
@@ -1159,7 +1329,7 @@ export default function Home() {
                 <CardContent className="pt-0 space-y-5">
                   {/* Blockchain Selector */}
                   <div>
-                    <label className="text-xs font-medium text-zinc-400 mb-2 block">Blockchain Network</label>
+                    <label className="text-xs font-medium text-zinc-400 mb-2 block text-center sm:text-left">Blockchain Network</label>
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                       {(Object.entries(BLOCKCHAIN_CONFIG) as [Blockchain, typeof BLOCKCHAIN_CONFIG[Blockchain]][]).map(
                         ([key, config]) => (
@@ -1195,7 +1365,7 @@ export default function Home() {
                   {/* Derivation Path */}
                   <div>
                     <div className="flex items-center gap-2 mb-2">
-                      <label className="text-xs font-medium text-zinc-400">Derivation Path</label>
+                      <label className="text-xs font-medium text-zinc-400 text-center sm:text-left">Derivation Path</label>
                       <Badge variant="outline" className="text-[8px] border-zinc-700 text-zinc-500 h-4 px-1.5">
                         Advanced
                       </Badge>
@@ -1216,7 +1386,7 @@ export default function Home() {
                       </TooltipProvider>
                     </div>
                     <Select value={derivationPath} onValueChange={setDerivationPath}>
-                      <SelectTrigger className="bg-zinc-900/80 border-zinc-800 text-zinc-100 font-mono text-xs h-9">
+                      <SelectTrigger className="bg-zinc-900/80 border-zinc-800 text-zinc-100 font-mono text-xs h-9 w-full">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent className="bg-zinc-800 border-zinc-700">
@@ -1230,10 +1400,43 @@ export default function Home() {
                     </Select>
                   </div>
 
+                  {/* Auto-Retry Toggle */}
+                  {BLOCKCHAIN_CONFIG[blockchain].paths.length > 1 && (
+                    <div className="flex items-center gap-3 bg-zinc-800/20 rounded-lg px-3 py-2.5 border border-zinc-800/40">
+                      <Switch
+                        id="auto-retry"
+                        checked={autoRetry}
+                        onCheckedChange={setAutoRetry}
+                        disabled={isRunning}
+                        className="scale-90"
+                      />
+                      <div className="flex-1">
+                        <Label htmlFor="auto-retry" className="text-xs font-medium text-zinc-300 cursor-pointer">
+                          Auto-retry all paths
+                        </Label>
+                        <p className="text-[10px] text-zinc-600 mt-0.5">
+                          {autoRetry
+                            ? `Will try all ${BLOCKCHAIN_CONFIG[blockchain].paths.length} paths for ${BLOCKCHAIN_CONFIG[blockchain].name}`
+                            : 'Only search the selected derivation path'}
+                        </p>
+                      </div>
+                      <TooltipProvider delayDuration={300}>
+                        <Tooltip>
+                          <TooltipTrigger>
+                            <Info className="h-3 w-3 text-zinc-600" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="max-w-xs text-xs">
+                            If no match is found with the current derivation path, automatically retry with alternative paths for this blockchain.
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </div>
+                  )}
+
                   {/* Known Address */}
                   <div>
                     <div className="flex items-center gap-2 mb-2">
-                      <label className="text-xs font-medium text-zinc-400">Known Wallet Address</label>
+                      <label className="text-xs font-medium text-zinc-400 text-center sm:text-left">Known Wallet Address</label>
                       {addressValidation && (
                         <Badge
                           variant="outline"
@@ -1314,19 +1517,25 @@ export default function Home() {
                   <Button
                     onClick={handleStartRecovery}
                     disabled={isStarting || knownCount < (wordCount === 12 ? 8 : 16) || !knownAddress.trim() || showEstimateWarning || (addressValidation !== null && !addressValidation.valid)}
-                    className="flex-1 h-12 bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white font-semibold text-sm transition-all duration-200 shadow-lg shadow-emerald-500/20 hover:shadow-emerald-500/30 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl"
+                    className="flex-1 h-12 bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white font-semibold text-sm transition-all duration-200 shadow-lg shadow-emerald-500/20 hover:shadow-emerald-500/30 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl relative overflow-hidden group"
                   >
-                    {isStarting ? (
-                      <>
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Starting...
-                      </>
-                    ) : (
-                      <>
-                        <Search className="h-4 w-4" />
-                        Start Recovery
-                      </>
+                    {/* Glow animation on the button */}
+                    {!isStarting && knownCount >= (wordCount === 12 ? 8 : 16) && knownAddress.trim() && (addressValidation === null || addressValidation.valid) && (
+                      <span className="absolute inset-0 rounded-xl animate-pulse bg-gradient-to-r from-emerald-400/20 to-cyan-400/20" />
                     )}
+                    <span className="relative z-10 flex items-center justify-center gap-2">
+                      {isStarting ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Starting...
+                        </>
+                      ) : (
+                        <>
+                          <Search className="h-4 w-4" />
+                          Start Recovery
+                        </>
+                      )}
+                    </span>
                   </Button>
                 ) : isRunning ? (
                   <Button
@@ -1365,7 +1574,7 @@ export default function Home() {
                         <div className="flex items-center gap-2">
                           <Loader2 className="h-4 w-4 text-emerald-400 animate-spin" />
                           <CardTitle className="text-sm font-semibold text-zinc-200">
-                            Recovery In Progress
+                            Searching{'.'.repeat(searchingDots)}
                           </CardTitle>
                           <Badge variant="outline" className="ml-auto text-[8px] border-emerald-500/30 text-emerald-400 h-5">
                             <Activity className="h-2.5 w-2.5 mr-0.5" />
@@ -1373,8 +1582,49 @@ export default function Home() {
                           </Badge>
                         </div>
                         <CardDescription className="text-xs text-zinc-500">
-                          Searching for matching wallet address...
+                          Searching for matching wallet address
+                          {jobStatus.derivationPath && (
+                            <span className="font-mono text-cyan-400/70 ml-1">
+                              ({BLOCKCHAIN_CONFIG[jobStatus.blockchain]?.paths?.find(p => p.path === jobStatus.derivationPath)?.label || jobStatus.derivationPath})
+                            </span>
+                          )}
                         </CardDescription>
+                        {/* Auto-retry path indicator */}
+                        {jobStatus.autoRetry && jobStatus.currentPathIndex !== undefined && (
+                          <div className="flex items-center gap-2 mt-1.5">
+                            <span className="text-[9px] text-zinc-500">
+                              Path {jobStatus.currentPathIndex + 1} of {BLOCKCHAIN_CONFIG[jobStatus.blockchain]?.paths?.length || 1}
+                            </span>
+                            <div className="flex items-center gap-1">
+                              {BLOCKCHAIN_CONFIG[jobStatus.blockchain]?.paths?.map((p, idx) => (
+                                <div
+                                  key={p.path}
+                                  className={`w-2 h-2 rounded-full transition-all duration-300 ${
+                                    idx === jobStatus.currentPathIndex
+                                      ? 'bg-emerald-400 scale-125'
+                                      : jobStatus.triedPaths?.includes(p.path)
+                                        ? 'bg-amber-500/50'
+                                        : 'bg-zinc-700'
+                                  }`}
+                                  title={p.label}
+                                />
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {/* Tried paths list when auto-retry is active */}
+                        {jobStatus.autoRetry && jobStatus.triedPaths && jobStatus.triedPaths.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {jobStatus.triedPaths.map((triedPath) => {
+                              const pathInfo = BLOCKCHAIN_CONFIG[jobStatus.blockchain]?.paths?.find(p => p.path === triedPath)
+                              return (
+                                <span key={triedPath} className="text-[8px] text-amber-400/60 bg-amber-500/5 border border-amber-500/10 rounded px-1.5 py-0.5">
+                                  ✗ {pathInfo?.label || triedPath}
+                                </span>
+                              )
+                            })}
+                          </div>
+                        )}
                       </CardHeader>
                       <CardContent className="space-y-4 pt-0">
                         <div className="space-y-2">
@@ -1396,7 +1646,7 @@ export default function Home() {
                             { icon: <Zap className="h-3 w-3 text-emerald-400" />, label: 'Speed', value: `${formatNumber(jobStatus.speed)}/s` },
                             { icon: <Search className="h-3 w-3 text-cyan-400" />, label: 'Checked', value: formatNumber(jobStatus.progress) },
                             { icon: <Clock className="h-3 w-3 text-amber-400" />, label: 'ETA', value: formatTime(etaSeconds) },
-                            { icon: <Sparkles className="h-3 w-3 text-teal-400" />, label: 'Elapsed', value: formatTime(elapsedSeconds) },
+                            { icon: <span className="flex items-center gap-1"><Sparkles className="h-3 w-3 text-teal-400" /><span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" /></span>, label: 'Elapsed', value: formatTime(isRunning ? liveElapsedSeconds : elapsedSeconds) },
                           ].map((stat) => (
                             <div key={stat.label} className="bg-zinc-800/40 rounded-lg p-2.5 text-center border border-zinc-800/40">
                               <div className="flex items-center justify-center gap-1 text-[9px] text-zinc-500 uppercase tracking-wider mb-0.5">
@@ -1615,7 +1865,7 @@ export default function Home() {
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div>
-                    <label className="text-xs font-medium text-zinc-400 mb-2 block">Seed Phrase (12 or 24 words)</label>
+                    <label className="text-xs font-medium text-zinc-400 mb-2 block text-center sm:text-left">Seed Phrase (12 or 24 words)</label>
                     <textarea
                       value={verifyMnemonic}
                       onChange={(e) => setVerifyMnemonic(e.target.value)}
@@ -1625,7 +1875,7 @@ export default function Home() {
                   </div>
 
                   <div>
-                    <label className="text-xs font-medium text-zinc-400 mb-2 block">Blockchain</label>
+                    <label className="text-xs font-medium text-zinc-400 mb-2 block text-center sm:text-left">Blockchain</label>
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                       {(Object.entries(BLOCKCHAIN_CONFIG) as [Blockchain, typeof BLOCKCHAIN_CONFIG[Blockchain]][]).map(
                         ([key, config]) => (
@@ -1648,7 +1898,7 @@ export default function Home() {
 
                   <div>
                     <div className="flex items-center gap-2 mb-2">
-                      <label className="text-xs font-medium text-zinc-400">Wallet Address</label>
+                      <label className="text-xs font-medium text-zinc-400 text-center sm:text-left">Wallet Address</label>
                       {verifyAddressValidation && (
                         <Badge
                           variant="outline"
@@ -1812,6 +2062,81 @@ export default function Home() {
               transition={{ duration: 0.2 }}
               className="space-y-4"
             >
+              {/* ── Recovery Stats Summary ── */}
+              {(() => {
+                // Combine persisted history and session jobs for stats
+                const allEntries = [
+                  ...persistedHistory.map(e => ({ found: e.found, timestamp: e.timestamp, source: 'persisted' as const })),
+                  ...jobHistory
+                    .filter(j => j.status === 'completed' || j.status === 'stopped')
+                    .map(j => ({
+                      found: !!(j.result && j.result.length > 0),
+                      timestamp: j.startedAt || Date.now(),
+                      source: 'session' as const,
+                    })),
+                ]
+                const totalRecoveries = allEntries.length
+                const successful = allEntries.filter(e => e.found).length
+                const failed = allEntries.filter(e => !e.found).length
+                // Calculate a rough total time (sum of time spans - we only have timestamps, so this is approximate)
+                const totalTimeMs = allEntries.length > 0
+                  ? allEntries.reduce((acc, e) => acc + (e.timestamp ? 1 : 0), 0) * 0 // We can't accurately calculate total time from just timestamps
+                  : 0
+                // Use a more meaningful metric: count of jobs
+                const successRate = totalRecoveries > 0 ? Math.round((successful / totalRecoveries) * 100) : 0
+
+                if (totalRecoveries === 0) return null
+
+                return (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.3 }}
+                  >
+                    <Card className="bg-zinc-900/40 border-zinc-800/50">
+                      <CardHeader className="pb-3">
+                        <div className="flex items-center gap-2">
+                          <BarChart3 className="h-4 w-4 text-cyan-400" />
+                          <CardTitle className="text-base font-semibold">Recovery Stats</CardTitle>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="pt-0">
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                          <div className="flex items-center gap-2.5 bg-zinc-800/30 border border-zinc-800/40 rounded-lg px-3 py-2.5">
+                            <div className="text-cyan-400"><Activity className="h-3.5 w-3.5" /></div>
+                            <div>
+                              <p className="text-sm font-semibold text-zinc-200">{totalRecoveries}</p>
+                              <p className="text-[9px] text-zinc-600 uppercase tracking-wider">Total</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2.5 bg-zinc-800/30 border border-zinc-800/40 rounded-lg px-3 py-2.5">
+                            <div className="text-emerald-400"><CheckCircle2 className="h-3.5 w-3.5" /></div>
+                            <div>
+                              <p className="text-sm font-semibold text-emerald-300">{successful}</p>
+                              <p className="text-[9px] text-zinc-600 uppercase tracking-wider">Found</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2.5 bg-zinc-800/30 border border-zinc-800/40 rounded-lg px-3 py-2.5">
+                            <div className="text-amber-400"><XCircle className="h-3.5 w-3.5" /></div>
+                            <div>
+                              <p className="text-sm font-semibold text-amber-300">{failed}</p>
+                              <p className="text-[9px] text-zinc-600 uppercase tracking-wider">No Match</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2.5 bg-zinc-800/30 border border-zinc-800/40 rounded-lg px-3 py-2.5">
+                            <div className="text-teal-400"><TrendingUp className="h-3.5 w-3.5" /></div>
+                            <div>
+                              <p className="text-sm font-semibold text-teal-300">{successRate}%</p>
+                              <p className="text-[9px] text-zinc-600 uppercase tracking-wider">Success Rate</p>
+                            </div>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </motion.div>
+                )
+              })()}
+
               <Card className="bg-zinc-900/40 border-zinc-800/50">
                 <CardHeader>
                   <div className="flex items-center gap-2">
@@ -1834,10 +2159,18 @@ export default function Home() {
                 </CardHeader>
                 <CardContent>
                   {jobHistory.length === 0 && persistedHistory.length === 0 ? (
-                    <div className="text-center py-8">
-                      <History className="h-8 w-8 text-zinc-800 mx-auto mb-2" />
-                      <p className="text-sm text-zinc-500">No recovery jobs yet</p>
-                      <p className="text-xs text-zinc-600">Start a recovery to see it here</p>
+                    <div className="text-center py-12 px-4">
+                      <div className="relative inline-flex items-center justify-center w-16 h-16 mb-4">
+                        <div className="absolute inset-0 rounded-full bg-zinc-800/50" />
+                        <History className="h-8 w-8 text-zinc-600 relative z-10" />
+                        <div className="absolute -top-1 -right-1 h-4 w-4 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center">
+                          <Search className="h-2 w-2 text-emerald-400" />
+                        </div>
+                      </div>
+                      <p className="text-sm font-medium text-zinc-400">No recovery history yet</p>
+                      <p className="text-xs text-zinc-600 mt-1 max-w-xs mx-auto">
+                        Start your first recovery to see results here. Your recovery history is persisted across sessions.
+                      </p>
                     </div>
                   ) : (
                     <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
@@ -1953,6 +2286,96 @@ export default function Home() {
           )}
         </AnimatePresence>
 
+        {/* ── Paste Seed Phrase Dialog ── */}
+        <Dialog open={showPasteDialog} onOpenChange={(open) => {
+          setShowPasteDialog(open)
+          if (!open) setPasteText('')
+        }}>
+          <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-100 sm:max-w-md">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.15 }}
+            >
+              <DialogHeader>
+                <DialogTitle className="text-base font-semibold flex items-center gap-2">
+                  <ClipboardPaste className="h-4 w-4 text-cyan-400" />
+                  Paste Seed Phrase
+                </DialogTitle>
+                <DialogDescription className="text-xs text-zinc-500">
+                  Paste a space-separated seed phrase (12 or 24 words). Words not in the BIP39 wordlist will be automatically marked as unknown.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4 py-2">
+                <Textarea
+                  value={pasteText}
+                  onChange={(e) => setPasteText(e.target.value)}
+                  placeholder="abandon ability able about above absent absorb abstract absurd abuse access accident..."
+                  className="min-h-[100px] bg-zinc-800/60 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 text-sm font-mono focus-visible:border-cyan-500/50 focus-visible:ring-cyan-500/20 resize-none"
+                />
+                {pasteText.trim() && (
+                  <div className="flex items-center gap-3 text-[10px]">
+                    {(() => {
+                      const words = pasteText.trim().split(/[\s\n]+/).filter(w => w.length > 0)
+                      const recognized = words.filter(w => wordlist.includes(w.toLowerCase())).length
+                      const unrecognized = words.length - recognized
+                      return (
+                        <>
+                          <Badge
+                            variant="outline"
+                            className={`text-[9px] h-5 ${
+                              words.length === 12 || words.length === 24
+                                ? 'border-emerald-500/30 text-emerald-400 bg-emerald-500/10'
+                                : 'border-amber-500/30 text-amber-400 bg-amber-500/10'
+                            }`}
+                          >
+                            {words.length} words
+                          </Badge>
+                          {recognized > 0 && (
+                            <Badge variant="outline" className="text-[9px] h-5 border-emerald-500/30 text-emerald-400 bg-emerald-500/10">
+                              <CheckCircle2 className="h-2.5 w-2.5 mr-0.5" />
+                              {recognized} recognized
+                            </Badge>
+                          )}
+                          {unrecognized > 0 && (
+                            <Badge variant="outline" className="text-[9px] h-5 border-amber-500/30 text-amber-400 bg-amber-500/10">
+                              <EyeOff className="h-2.5 w-2.5 mr-0.5" />
+                              {unrecognized} unknown
+                            </Badge>
+                          )}
+                        </>
+                      )
+                    })()}
+                  </div>
+                )}
+              </div>
+              <DialogFooter>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-zinc-400 hover:text-zinc-300"
+                  onClick={() => {
+                    setShowPasteDialog(false)
+                    setPasteText('')
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  className="bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white border-0"
+                  onClick={handlePasteSeedPhrase}
+                  disabled={!pasteText.trim()}
+                >
+                  <ClipboardPaste className="h-3.5 w-3.5 mr-1.5" />
+                  Fill Words
+                </Button>
+              </DialogFooter>
+            </motion.div>
+          </DialogContent>
+        </Dialog>
+
         {/* ── FAQ Section ── */}
         <section>
           <div className="flex items-center gap-2 mb-3">
@@ -2017,16 +2440,35 @@ export default function Home() {
 
       {/* ── Footer ── */}
       <footer className="mt-auto border-t border-zinc-800/40 bg-zinc-950/80">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3">
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-1.5">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 py-4">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
             <div className="flex items-center gap-2">
-              <Shield className="h-3 w-3 text-zinc-700" />
+              <Shield className="h-3.5 w-3.5 text-zinc-700" />
               <span className="text-[10px] text-zinc-600">
                 &copy; {new Date().getFullYear()} CryptoRecover
               </span>
+              <Badge variant="outline" className="text-[8px] h-4 px-1.5 border-zinc-800 text-zinc-600">
+                v1.0.0
+              </Badge>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-[9px] text-zinc-600 hover:text-zinc-400 cursor-default transition-colors flex items-center gap-1">
+                <Lock className="h-2.5 w-2.5" />
+                End-to-end Secure
+              </span>
+              <span className="text-[9px] text-zinc-700">|</span>
+              <span className="text-[9px] text-zinc-600 hover:text-zinc-400 cursor-default transition-colors flex items-center gap-1">
+                <Shield className="h-2.5 w-2.5" />
+                Own-Wallet Only
+              </span>
+              <span className="text-[9px] text-zinc-700">|</span>
+              <span className="text-[9px] text-zinc-600 hover:text-zinc-400 cursor-default transition-colors flex items-center gap-1">
+                <ExternalLink className="h-2.5 w-2.5" />
+                BIP39 Standard
+              </span>
             </div>
             <p className="text-[9px] text-zinc-700 text-center sm:text-right">
-              For legitimate self-recovery only. No data is stored after session ends.
+              No data stored after session ends
             </p>
           </div>
         </div>

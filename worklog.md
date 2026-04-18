@@ -1,7 +1,93 @@
 # CryptoRecover - Work Log
 
 ## Project Status
-**Fully functional with comprehensive features** - All 4 blockchains (BTC, ETH, SOL, XRP) tested and working. Latest: Fixed critical `isCompleted` reference error, all features verified via agent-browser QA.
+**Fully functional with comprehensive features** - All 4 blockchains (BTC, ETH, SOL, XRP) tested and working. Latest: Phase 4 - Multi-path auto-retry, paste-from-clipboard, real-time timer, BIP39 checksum stats, auto-retry toggle, enhanced styling.
+
+---
+
+## Phase 4: Cron Review - Major Feature Enhancement (2026-04-18)
+
+### Project Assessment
+- Reviewed worklog.md and all source files
+- Previous session: All 4 blockchains working, isCompleted bug fixed
+- Identified critical 24-word support bug and multiple feature gaps
+
+### Critical Bug Fix
+1. **24-Word API Validation Bug** - `/api/recover` route hardcoded `partialMnemonic.length !== 12`, preventing 24-word seed phrases from working
+   - Fixed: Changed to `partialMnemonic.length !== 12 && partialMnemonic.length !== 24`
+   - Updated minimum known words: 8 for 12-word, 16 for 24-word phrases
+
+### New Features Added
+
+1. **Multi-Path Auto-Retry Recovery** - Automatically tries all derivation paths when no match found
+   - Backend: `startMultiPathRecovery()` function with path polling and auto-switching
+   - API: `?autoRetry=true` query parameter on POST /api/recover
+   - 500ms delay between path switches for UX
+   - Records tried paths and current path index in job object
+   - Frontend: Auto-retry toggle with switch, info tooltip, path progress indicator
+
+2. **BIP39 Checksum Filter Stats** - Shows valid combinations after checksum pre-filtering
+   - `validCombinationsEstimate` field on RecoveryJob (~6.25% of total pass BIP39 checksum)
+   - Frontend: Shows "~X valid combos (after BIP39 filter)" in seed phrase card
+
+3. **Paste-From-Clipboard Seed Phrase** - Bulk input via dialog modal
+   - Dialog with textarea for pasting space-separated seed phrases
+   - Auto-parses, validates BIP39 words, auto-switches 12/24 word count
+   - Non-BIP39 words automatically marked as unknown
+   - Toast feedback with recognized vs unrecognized counts
+
+4. **Real-Time Elapsed Timer** - Live updating timer during recovery
+   - `liveElapsedSeconds` state updated every second via setInterval
+   - Pulsing green dot indicator next to elapsed time
+
+5. **Recovery Stats Summary** - Aggregate stats in History tab
+   - Total Recoveries, Successful, No Match, Success Rate
+
+6. **Auto-Retry Path Notifications** - Toast and visual feedback during path switching
+   - Toast: "No match on [path name], trying [next path name]..."
+   - Mini path progress bar (● ● ○ dots for each path)
+
+### Styling Improvements
+
+1. Section number badges (①②③) on step cards and card headers
+2. Mobile responsiveness: `text-center sm:text-left` on labels, full-width Select
+3. Animated glow on Start Recovery button when ready
+4. Searching animation with cycling dots in progress card
+5. Path progress indicator (● ● ○) during multi-path search
+6. Empty state for History tab with illustration icon
+7. Enhanced footer with version badge and security info
+
+### Files Changed
+- `/src/lib/crypto-recovery.ts` - Multi-path recovery, BIP39 estimate, new job fields
+- `/src/app/api/recover/route.ts` - Fixed 24-word validation, autoRetry support
+- `/src/app/page.tsx` - All frontend enhancements
+
+### API Testing Results
+- 24-word recovery: ✅ | Auto-retry (ETH): ✅ | Verify: ✅ | Derive: ✅ | Lint: ✅
+
+---
+Task ID: 5
+Agent: full-stack-developer
+Task: Add paste-from-clipboard and recovery stats features
+
+Work Log:
+- Read worklog.md and page.tsx (~2050 lines) to understand current project structure
+- Added imports for Dialog, Textarea, ClipboardPaste, TrendingUp, BarChart3 from lucide-react
+- Added `showPasteDialog` and `pasteText` state variables
+- Added `handlePasteSeedPhrase()` handler that parses space-separated text, validates BIP39 words, auto-switches 12/24 word count, marks non-BIP39 words as unknown (null)
+- Added "Paste" button in Seed Phrase card header next to 12/24 toggle (cyan accent, ClipboardPaste icon)
+- Added Dialog component with Textarea for pasting, live word count/recognized/unknown badges, framer-motion animation
+- Added Recovery Stats Summary card at top of History tab showing Total, Found, No Match, and Success Rate
+- Stats calculated from both persisted history entries and session jobs
+- Used grid layout with stat cards matching existing app style (zinc-800/30 bg, colored icons)
+- Stats card only shows when there are recovery entries (returns null otherwise)
+- Ran `bun run lint` - passed clean with no errors
+
+Stage Summary:
+- Paste Seed Phrase feature fully implemented: modal with textarea, parsing, auto-switch word count, BIP39 validation, recognized/unknown counts via toast
+- Recovery Stats Summary fully implemented: aggregate stats (Total, Found, No Match, Success Rate) at top of History tab
+- All changes in `/src/app/page.tsx` only - no backend changes needed
+- Lint: ✅ Clean
 
 ## Phase 2 Enhancements (Current Session - Cron Review)
 
@@ -202,3 +288,46 @@
 - Dev server: ✅ All pages returning 200
 - agent-browser: ✅ All features tested and working
 - Quick Verify with known mnemonic: ✅ Match found correctly
+
+---
+
+## Task 2: Add Multi-Path Auto-Retry Recovery Feature (2026-03-05)
+
+### Changes Made
+
+1. **RecoveryJob type extended** with new optional fields:
+   - `currentPathIndex?: number` - tracks which derivation path index is being tried
+   - `triedPaths?: string[]` - list of paths already searched
+   - `pathSwitchAt?: number` - timestamp when current path search started
+   - `autoRetry?: boolean` - whether multi-path auto-retry is enabled
+   - `validCombinationsEstimate?: number` - estimated valid combinations after BIP39 checksum filter (~6.25% of total)
+
+2. **createJob() updated**:
+   - Now accepts optional 5th parameter `autoRetry`
+   - Computes `currentPathIndex` from derivation path within blockchain's paths
+   - Sets `validCombinationsEstimate = Math.floor(total * 0.0625)`
+   - Initializes `triedPaths: []`, `pathSwitchAt: undefined`
+
+3. **startMultiPathRecovery() function added**:
+   - Automatically tries all derivation paths for the selected blockchain when no match found
+   - Records tried paths, polls for completion every 500ms
+   - On completion with no match, waits 500ms then resets job and starts next path
+   - Stops when match found, job stopped/failed, or all paths exhausted
+   - Falls back to `startRecovery()` for blockchains with single path (e.g., XRP)
+
+4. **API route enhanced** (`/api/recover`):
+   - POST endpoint now supports `?autoRetry=true` query parameter
+   - When enabled, calls `startMultiPathRecovery()` instead of `startRecovery()`
+   - GET endpoint already returns full job object including new fields
+
+### Backward Compatibility
+- All new fields are optional - existing code works unchanged
+- `startRecovery()` function completely unchanged
+- API contracts only extended, never modified
+
+### Files Changed
+- `/src/lib/crypto-recovery.ts` - Added new fields, updated createJob, added startMultiPathRecovery
+- `/src/app/api/recover/route.ts` - Added autoRetry query parameter support
+
+### Verification
+- Lint: ✅ Clean (`bun run lint` passed with no errors or warnings)

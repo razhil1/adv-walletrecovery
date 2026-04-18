@@ -55,6 +55,13 @@ export interface RecoveryJob {
   result: string[] | null;
   startedAt: number;
   foundAt?: number;
+  // Multi-path auto-retry fields
+  currentPathIndex?: number; // which derivation path index is currently being tried
+  triedPaths?: string[]; // list of paths that have already been searched
+  pathSwitchAt?: number; // timestamp when the current path search started
+  autoRetry?: boolean; // whether multi-path auto-retry is enabled
+  // BIP39 checksum estimate
+  validCombinationsEstimate?: number; // estimated valid combinations after BIP39 checksum filter
 }
 
 // ─── In-memory job store ─────────────────────────────────────────────────────
@@ -282,7 +289,8 @@ export function createJob(
   partialMnemonic: (string | null)[],
   knownAddress: string,
   blockchain: Blockchain,
-  derivationPath?: string
+  derivationPath?: string,
+  autoRetry?: boolean
 ): RecoveryJob {
   const wordlist = getWordlist();
   const unknownPositions = partialMnemonic.reduce((acc, word, i) => {
@@ -293,6 +301,13 @@ export function createJob(
   const unknownCount = unknownPositions.length;
   const total = Math.pow(wordlist.length, unknownCount);
   const path = derivationPath || getDefaultPath(blockchain);
+
+  // Determine current path index within the blockchain's available paths
+  const blockchainPaths = getPathsForBlockchain(blockchain);
+  const pathIndex = blockchainPaths.findIndex(p => p.path === path);
+
+  // BIP39 checksum filters out ~93.75% of candidates, so ~6.25% pass
+  const validCombinationsEstimate = Math.floor(total * 0.0625);
 
   const job: RecoveryJob = {
     id: uuidv4(),
@@ -306,6 +321,11 @@ export function createJob(
     speed: 0,
     result: null,
     startedAt: 0,
+    currentPathIndex: pathIndex >= 0 ? pathIndex : 0,
+    triedPaths: [],
+    pathSwitchAt: undefined,
+    autoRetry: autoRetry ?? false,
+    validCombinationsEstimate,
   };
 
   jobs.set(job.id, job);
@@ -469,6 +489,84 @@ export function startRecovery(job: RecoveryJob): void {
 
   // Kick off the first batch
   processBatch();
+}
+
+// ─── Multi-path auto-retry recovery ──────────────────────────────────────────
+
+export function startMultiPathRecovery(job: RecoveryJob): void {
+  const blockchainPaths = getPathsForBlockchain(job.blockchain);
+
+  if (blockchainPaths.length <= 1) {
+    // Only one path available - just run normal recovery
+    job.pathSwitchAt = Date.now();
+    startRecovery(job);
+    return;
+  }
+
+  // Record the initial path as being tried
+  const initialPath = job.derivationPath;
+  if (!job.triedPaths) job.triedPaths = [];
+  if (!job.triedPaths.includes(initialPath)) {
+    job.triedPaths.push(initialPath);
+  }
+
+  job.pathSwitchAt = Date.now();
+
+  // Start the first path search
+  startRecovery(job);
+
+  // Poll for completion to decide whether to auto-retry with next path
+  const pollInterval = setInterval(() => {
+    // If job was stopped, failed, or found a result — stop polling
+    if (job.status === 'stopped' || job.status === 'failed') {
+      clearInterval(pollInterval);
+      return;
+    }
+
+    // If job completed
+    if (job.status === 'completed') {
+      clearInterval(pollInterval);
+
+      // If result found (non-empty), we're done
+      if (job.result && job.result.length > 0) {
+        return;
+      }
+
+      // No match on current path — try next path
+      const currentIdx = job.currentPathIndex ?? 0;
+      const nextIdx = currentIdx + 1;
+
+      // No more paths to try
+      if (nextIdx >= blockchainPaths.length) {
+        // All paths exhausted with no match
+        // Job stays completed with result: []
+        return;
+      }
+
+      // Switch to next derivation path after a short delay
+      setTimeout(() => {
+        const nextPath = blockchainPaths[nextIdx];
+
+        // Record the tried path
+        job.triedPaths!.push(nextPath.path);
+
+        // Reset job for next path search
+        job.derivationPath = nextPath.path;
+        job.currentPathIndex = nextIdx;
+        job.status = 'pending';
+        job.progress = 0;
+        job.speed = 0;
+        job.result = null;
+        job.foundAt = undefined;
+        job.pathSwitchAt = Date.now();
+
+        // Start recovery with the new path
+        startMultiPathRecovery(job);
+      }, 500);
+
+      return;
+    }
+  }, 500);
 }
 
 // ─── Address comparison ──────────────────────────────────────────────────────
