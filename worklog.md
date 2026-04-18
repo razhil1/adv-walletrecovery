@@ -72,3 +72,27 @@
 - Page load time is ~6 seconds due to large wordlist payload (could be optimized)
 - Job history is in-memory only (lost on server restart)
 - Performance with 3+ unknown words remains impractical
+
+---
+
+## Task 3: Fix Backend Derivation Paths (2026-03-05)
+
+### Issues Fixed
+1. **ETH Ledger Live path was identical to Standard** — Both used `m/44'/60'/0'/0/0`, causing the frontend Select component to fail (duplicate values). Fixed by:
+   - Keeping ETH Standard (MetaMask): `m/44'/60'/0'/0/0`
+   - Changing ETH Ledger Live to: `m/44'/60'/1'/0/0` (account 1 derivation)
+   - Adding new ETH Second Address: `m/44'/60'/0'/0/1` (second address index)
+
+2. **SOL Phantom and Standard paths were identical** — Both used `m/44'/501'/0'/0'`. Fixed by:
+   - Keeping SOL Standard (BIP44): `m/44'/501'/0'/0'`
+   - Changing SOL Phantom/Solflare to: `m/501'/0'/0'` (deprecated Solana path used by older Phantom/Solflare wallets)
+
+3. **deriveSOLAddress ignored path parameter** — Function accepted `_path` but hardcoded `m/44'/501'/0'/0'` in the `ed25519DerivePath` call. Fixed by renaming `_path` → `path` and passing it to `ed25519DerivePath(path, seedHex)`.
+
+### Files Changed
+- `/src/lib/crypto-recovery.ts`
+  - Updated `DERIVATION_PATHS` array with unique paths for all entries
+  - Fixed `deriveSOLAddress()` to use the `path` parameter instead of hardcoding
+
+### Verification
+- Lint: ✅ Clean (`bun run lint` passed with no errors)

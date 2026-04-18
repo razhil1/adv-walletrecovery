@@ -18,14 +18,15 @@ export interface DerivationPath {
 }
 
 export const DERIVATION_PATHS: DerivationPath[] = [
-  { label: 'Ethereum (Standard)', path: "m/44'/60'/0'/0/0", blockchain: 'eth' },
-  { label: 'Ethereum (Ledger)', path: "m/44'/60'/0'/0/0", blockchain: 'eth' },
-  { label: 'Bitcoin (Legacy P2PKH)', path: "m/44'/0'/0'/0/0", blockchain: 'btc' },
-  { label: 'Bitcoin (SegWit P2SH)', path: "m/49'/0'/0'/0/0", blockchain: 'btc' },
-  { label: 'Bitcoin (Native SegWit)', path: "m/84'/0'/0'/0/0", blockchain: 'btc' },
-  { label: 'Solana (Standard)', path: "m/44'/501'/0'/0'", blockchain: 'sol' },
-  { label: 'Solana (Phantom)', path: "m/44'/501'/0'/0'", blockchain: 'sol' },
-  { label: 'XRP (Standard)', path: "m/44'/144'/0'/0/0", blockchain: 'xrp' },
+  { label: 'Standard (MetaMask)', path: "m/44'/60'/0'/0/0", blockchain: 'eth' },
+  { label: 'Ledger Live (Acct 1)', path: "m/44'/60'/1'/0/0", blockchain: 'eth' },
+  { label: 'Second Address', path: "m/44'/60'/0'/0/1", blockchain: 'eth' },
+  { label: 'Legacy (P2PKH)', path: "m/44'/0'/0'/0/0", blockchain: 'btc' },
+  { label: 'SegWit (P2SH)', path: "m/49'/0'/0'/0/0", blockchain: 'btc' },
+  { label: 'Native SegWit', path: "m/84'/0'/0'/0/0", blockchain: 'btc' },
+  { label: 'Standard (BIP44)', path: "m/44'/501'/0'/0'", blockchain: 'sol' },
+  { label: 'Solflare/Phantom (Deprecated)', path: "m/501'/0'/0'", blockchain: 'sol' },
+  { label: 'Standard', path: "m/44'/144'/0'/0/0", blockchain: 'xrp' },
 ];
 
 export function getPathsForBlockchain(blockchain: Blockchain): DerivationPath[] {
@@ -155,10 +156,10 @@ async function deriveBTCAddress(mnemonic: string, path: string): Promise<string>
   return base58Encode(addressBytes, BTC_BASE58_ALPHABET);
 }
 
-async function deriveSOLAddress(mnemonic: string, _path: string): Promise<string> {
+async function deriveSOLAddress(mnemonic: string, path: string): Promise<string> {
   const seed = await bip39.mnemonicToSeed(mnemonic);
   const seedHex = seed.toString('hex');
-  const { key } = ed25519DerivePath("m/44'/501'/0'/0'", seedHex);
+  const { key } = ed25519DerivePath(path, seedHex);
   const keypair = nacl.sign.keyPair.fromSeed(key);
   return bs58.encode(Buffer.from(keypair.publicKey));
 }

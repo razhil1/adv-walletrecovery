@@ -7,6 +7,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
+import { Switch } from '@/components/ui/switch'
+import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
@@ -14,6 +16,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import {
   Shield,
   Key,
@@ -43,6 +51,15 @@ import {
   Activity,
   Timer,
   Hash,
+  Download,
+  Lock,
+  Globe,
+  Cpu,
+  Database,
+  ToggleLeft,
+  ToggleRight,
+  Info,
+  ExternalLink,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -94,14 +111,38 @@ function formatNumber(n: number): string {
   return n.toLocaleString()
 }
 
+function validateAddress(address: string, blockchain: Blockchain): { valid: boolean; hint: string } {
+  const trimmed = address.trim()
+  if (!trimmed) return { valid: false, hint: 'Address is required' }
+  switch (blockchain) {
+    case 'eth':
+      if (/^0x[0-9a-fA-F]{40}$/.test(trimmed)) return { valid: true, hint: 'Valid Ethereum address' }
+      if (trimmed.startsWith('0x')) return { valid: false, hint: 'ETH addresses are 42 chars (0x + 40 hex)' }
+      return { valid: false, hint: 'ETH addresses start with 0x' }
+    case 'btc':
+      if (/^[13][a-km-zA-HJ-NP-Z1-9]{25,34}$/.test(trimmed)) return { valid: true, hint: 'Valid Legacy/SegWit address' }
+      if (/^bc1[a-zA-HJ-NP-Z0-9]{25,90}$/.test(trimmed)) return { valid: true, hint: 'Valid Native SegWit address' }
+      return { valid: false, hint: 'BTC addresses start with 1, 3, or bc1' }
+    case 'sol':
+      if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(trimmed)) return { valid: true, hint: 'Valid Solana address' }
+      return { valid: false, hint: 'SOL addresses are Base58, 32-44 chars' }
+    case 'xrp':
+      if (/^r[1-9A-HJ-NP-Za-km-z]{24,34}$/.test(trimmed)) return { valid: true, hint: 'Valid XRP address' }
+      return { valid: false, hint: 'XRP addresses start with r, 25-35 chars' }
+    default:
+      return { valid: false, hint: 'Unknown blockchain' }
+  }
+}
+
 const BLOCKCHAIN_CONFIG: Record<
   Blockchain,
-  { name: string; symbol: string; icon: string; accent: string; accentBg: string; placeholder: string; hint: string; paths: PathOption[] }
+  { name: string; symbol: string; icon: string; color: string; accent: string; accentBg: string; placeholder: string; hint: string; paths: PathOption[] }
 > = {
   btc: {
     name: 'Bitcoin',
     symbol: 'BTC',
     icon: '₿',
+    color: 'orange',
     accent: 'text-orange-400',
     accentBg: 'bg-orange-500/10 border-orange-500/30',
     placeholder: '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa...',
@@ -116,32 +157,36 @@ const BLOCKCHAIN_CONFIG: Record<
     name: 'Ethereum',
     symbol: 'ETH',
     icon: 'Ξ',
+    color: 'emerald',
     accent: 'text-emerald-400',
     accentBg: 'bg-emerald-500/10 border-emerald-500/30',
     placeholder: '0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38...',
     hint: 'Starts with 0x, 42 characters',
     paths: [
-      { label: 'Standard', path: "m/44'/60'/0'/0/0" },
-      { label: 'Ledger Live', path: "m/44'/60'/0'/0/0" },
+      { label: 'Standard (MetaMask)', path: "m/44'/60'/0'/0/0" },
+      { label: 'Ledger Live (Acct 1)', path: "m/44'/60'/1'/0/0" },
+      { label: 'Second Address', path: "m/44'/60'/0'/0/1" },
     ],
   },
   sol: {
     name: 'Solana',
     symbol: 'SOL',
     icon: '◎',
+    color: 'cyan',
     accent: 'text-cyan-400',
     accentBg: 'bg-cyan-500/10 border-cyan-500/30',
     placeholder: '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU...',
     hint: 'Base58 encoded, 32-44 characters',
     paths: [
       { label: 'Standard (BIP44)', path: "m/44'/501'/0'/0'" },
-      { label: 'Phantom', path: "m/44'/501'/0'/0'" },
+      { label: 'Solflare/Phantom (Deprecated)', path: "m/501'/0'/0'" },
     ],
   },
   xrp: {
     name: 'XRP',
     symbol: 'XRP',
     icon: '✕',
+    color: 'teal',
     accent: 'text-teal-400',
     accentBg: 'bg-teal-500/10 border-teal-500/30',
     placeholder: 'rN7n3473SaZBCG4dFL83w7w1g2h2h4kQ7V...',
@@ -161,6 +206,7 @@ function WordInput({
   onValueChange,
   onToggleUnknown,
   wordlist,
+  onNext,
 }: {
   index: number
   value: string
@@ -168,6 +214,7 @@ function WordInput({
   onValueChange: (val: string) => void
   onToggleUnknown: () => void
   wordlist: string[]
+  onNext?: () => void
 }) {
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const [highlightIndex, setHighlightIndex] = useState(-1)
@@ -187,6 +234,8 @@ function WordInput({
     filtered.length > 0 &&
     !(filtered.length === 1 && filtered[0] === value.toLowerCase())
 
+  const isValidWord = value && wordlist.includes(value.toLowerCase())
+
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
       if (
@@ -203,29 +252,42 @@ function WordInput({
   }, [])
 
   function handleKeyDown(e: React.KeyboardEvent) {
-    if (!showDropdown) return
-    if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      setHighlightIndex((i) => Math.min(i + 1, filtered.length - 1))
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      setHighlightIndex((i) => Math.max(i - 1, 0))
-    } else if (e.key === 'Enter' && highlightIndex >= 0) {
-      e.preventDefault()
-      onValueChange(filtered[highlightIndex])
-      setDropdownOpen(false)
-    } else if (e.key === 'Escape') {
-      setDropdownOpen(false)
+    if (showDropdown) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setHighlightIndex((i) => Math.min(i + 1, filtered.length - 1))
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setHighlightIndex((i) => Math.max(i - 1, 0))
+      } else if (e.key === 'Enter' && highlightIndex >= 0) {
+        e.preventDefault()
+        onValueChange(filtered[highlightIndex])
+        setDropdownOpen(false)
+        onNext?.()
+      } else if (e.key === 'Escape') {
+        setDropdownOpen(false)
+      }
+    } else if (e.key === 'Enter' || (e.key === 'Tab' && !e.shiftKey)) {
+      if (isValidWord) {
+        e.preventDefault()
+        onNext?.()
+      }
     }
+  }
+
+  function selectWord(word: string) {
+    onValueChange(word)
+    setDropdownOpen(false)
+    setTimeout(() => onNext?.(), 50)
   }
 
   return (
     <div className="relative">
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1.5">
         <div className="relative flex-1">
           <span
-            className={`absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold pointer-events-none z-10 ${
-              isUnknown ? 'text-amber-500' : 'text-zinc-500'
+            className={`absolute left-2 top-1/2 -translate-y-1/2 text-[10px] font-bold pointer-events-none z-10 transition-colors ${
+              isUnknown ? 'text-amber-500' : isValidWord ? 'text-emerald-500/70' : 'text-zinc-500'
             }`}
           >
             {index + 1}
@@ -251,52 +313,62 @@ function WordInput({
             onKeyDown={handleKeyDown}
             disabled={isUnknown}
             placeholder={isUnknown ? '???' : 'word'}
-            className={`h-11 pl-7 pr-2 text-sm font-mono transition-all duration-200 ${
+            className={`h-11 pl-7 pr-2 text-sm font-mono transition-all duration-200 rounded-lg ${
               isUnknown
                 ? 'bg-amber-500/10 border-amber-500/40 text-amber-400 placeholder:text-amber-500/50 shadow-inner shadow-amber-500/5'
-                : value && wordlist.includes(value.toLowerCase())
+                : isValidWord
                   ? 'bg-zinc-900/80 border-emerald-500/40 text-emerald-300 placeholder:text-zinc-600 shadow-inner shadow-emerald-500/5'
                   : 'bg-zinc-900/80 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus:border-emerald-500/50 focus:ring-emerald-500/20'
             }`}
           />
+          {isValidWord && !isUnknown && (
+            <Check className="absolute right-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-emerald-500/60" />
+          )}
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          className={`h-11 w-11 shrink-0 transition-all duration-200 rounded-lg ${
-            isUnknown
-              ? 'text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 border border-amber-500/30'
-              : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
-          }`}
-          onClick={onToggleUnknown}
-          title={isUnknown ? 'Mark as known' : 'Mark as unknown'}
-        >
-          {isUnknown ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-        </Button>
+        <TooltipProvider delayDuration={300}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className={`h-11 w-11 shrink-0 transition-all duration-200 rounded-lg ${
+                  isUnknown
+                    ? 'text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 border border-amber-500/30'
+                    : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
+                }`}
+                onClick={onToggleUnknown}
+              >
+                {isUnknown ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="text-xs">
+              {isUnknown ? 'Mark as known' : 'Mark as unknown'}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </div>
 
       {/* Autocomplete Dropdown */}
       {showDropdown && (
         <div
           ref={dropdownRef}
-          className="absolute z-50 top-full mt-1 w-full bg-zinc-800 border border-zinc-700 rounded-lg shadow-xl shadow-black/40 overflow-hidden"
+          className="absolute z-50 top-full mt-1 w-full bg-zinc-800/95 backdrop-blur-sm border border-zinc-700 rounded-lg shadow-xl shadow-black/40 overflow-hidden"
         >
           {filtered.map((word, i) => (
             <button
               key={word}
-              className={`w-full text-left px-3 py-1.5 text-sm font-mono transition-colors ${
+              className={`w-full text-left px-3 py-1.5 text-sm font-mono transition-colors flex items-center gap-2 ${
                 i === highlightIndex
                   ? 'bg-emerald-500/20 text-emerald-300'
-                  : 'text-zinc-300 hover:bg-zinc-700'
+                  : 'text-zinc-300 hover:bg-zinc-700/80'
               }`}
               onMouseDown={(e) => {
                 e.preventDefault()
-                onValueChange(word)
-                setDropdownOpen(false)
-                inputRef.current?.focus()
+                selectWord(word)
               }}
               onMouseEnter={() => setHighlightIndex(i)}
             >
+              <span className="text-emerald-400/40 text-[10px] font-bold w-4">{i + 1}</span>
               {word}
             </button>
           ))}
@@ -311,17 +383,18 @@ function WordInput({
 function FaqItem({ question, answer }: { question: string; answer: string }) {
   const [open, setOpen] = useState(false)
   return (
-    <div className="border border-zinc-800/60 rounded-lg overflow-hidden">
+    <div className="border border-zinc-800/60 rounded-xl overflow-hidden transition-colors hover:border-zinc-700/80">
       <button
-        className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-zinc-900/50 transition-colors"
+        className="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-zinc-900/50 transition-colors"
         onClick={() => setOpen(!open)}
       >
         <span className="text-sm font-medium text-zinc-300">{question}</span>
-        {open ? (
-          <ChevronUp className="h-4 w-4 text-zinc-500 shrink-0" />
-        ) : (
+        <motion.div
+          animate={{ rotate: open ? 180 : 0 }}
+          transition={{ duration: 0.2 }}
+        >
           <ChevronDown className="h-4 w-4 text-zinc-500 shrink-0" />
-        )}
+        </motion.div>
       </button>
       <AnimatePresence>
         {open && (
@@ -331,7 +404,7 @@ function FaqItem({ question, answer }: { question: string; answer: string }) {
             exit={{ height: 0, opacity: 0 }}
             transition={{ duration: 0.2 }}
           >
-            <div className="px-4 pb-3 text-xs text-zinc-500 leading-relaxed">
+            <div className="px-5 pb-4 text-xs text-zinc-500 leading-relaxed">
               {answer}
             </div>
           </motion.div>
@@ -345,6 +418,7 @@ function FaqItem({ question, answer }: { question: string; answer: string }) {
 
 export default function Home() {
   // ── State ──
+  const [wordCount, setWordCount] = useState<12 | 24>(12)
   const [words, setWords] = useState<(string | null)[]>(Array(12).fill(''))
   const [inputValues, setInputValues] = useState<string[]>(Array(12).fill(''))
   const [blockchain, setBlockchain] = useState<Blockchain>('eth')
@@ -357,6 +431,7 @@ export default function Home() {
   const [copied, setCopied] = useState(false)
   const [activeTab, setActiveTab] = useState<AppTab>('recover')
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const inputRefs = useRef<(HTMLInputElement | null)[]>([])
 
   // Verify tab state
   const [verifyMnemonic, setVerifyMnemonic] = useState('')
@@ -370,6 +445,17 @@ export default function Home() {
 
   // Estimate warning state
   const [showEstimateWarning, setShowEstimateWarning] = useState(false)
+
+  // ── Address validation ──
+  const addressValidation = useMemo(() => {
+    if (!knownAddress.trim()) return null
+    return validateAddress(knownAddress, blockchain)
+  }, [knownAddress, blockchain])
+
+  const verifyAddressValidation = useMemo(() => {
+    if (!verifyAddress.trim()) return null
+    return validateAddress(verifyAddress, verifyBlockchain)
+  }, [verifyAddress, verifyBlockchain])
 
   // ── Fetch wordlist ──
   useEffect(() => {
@@ -389,7 +475,6 @@ export default function Home() {
           setJobStatus(data)
           if (data.status === 'completed' || data.status === 'failed' || data.status === 'stopped') {
             if (pollRef.current) clearInterval(pollRef.current)
-            // Refresh history
             fetchHistory()
           }
         } catch {
@@ -440,10 +525,24 @@ export default function Home() {
   const estimatedSeconds = useMemo(() => {
     if (unknownCount === 0) return 0
     const total = Math.pow(2048, unknownCount)
-    return total / 1000 // assuming ~1000 combos/sec
+    return total / 1000
   }, [unknownCount])
 
   // ── Handlers ──
+  const handleWordCountChange = useCallback((count: 12 | 24) => {
+    setWordCount(count)
+    const newWords = Array(count).fill('')
+    const newInputValues = Array(count).fill('')
+    // Preserve existing values
+    const minLen = Math.min(words.length, count)
+    for (let i = 0; i < minLen; i++) {
+      newWords[i] = words[i]
+      newInputValues[i] = inputValues[i]
+    }
+    setWords(newWords)
+    setInputValues(newInputValues)
+  }, [words, inputValues])
+
   const handleWordChange = useCallback((index: number, val: string) => {
     setInputValues((prev) => {
       const next = [...prev]
@@ -478,9 +577,17 @@ export default function Home() {
     }
   }, [])
 
+  const focusNextInput = useCallback((currentIndex: number) => {
+    const nextIndex = currentIndex + 1
+    if (nextIndex < wordCount) {
+      inputRefs.current[nextIndex]?.focus()
+    }
+  }, [wordCount])
+
   const handleStartRecovery = async () => {
-    if (knownCount < 8) {
-      toast.error('At least 8 known words required', {
+    const minKnown = wordCount === 12 ? 8 : 16
+    if (knownCount < minKnown) {
+      toast.error(`At least ${minKnown} known words required`, {
         description: `You have ${knownCount} known words. Please fill in more slots or mark fewer as unknown.`,
       })
       return
@@ -488,6 +595,12 @@ export default function Home() {
     if (!knownAddress.trim()) {
       toast.error('Known address is required', {
         description: 'Please enter your known wallet address for verification.',
+      })
+      return
+    }
+    if (addressValidation && !addressValidation.valid) {
+      toast.error('Invalid wallet address format', {
+        description: addressValidation.hint,
       })
       return
     }
@@ -501,7 +614,7 @@ export default function Home() {
 
     const partialMnemonic = words.map((w) => (w && w.trim().length > 0 ? w.trim() : null))
 
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < wordCount; i++) {
       const w = partialMnemonic[i]
       if (w !== null && wordlist.length > 0 && !wordlist.includes(w)) {
         toast.error(`Invalid word at position ${i + 1}: "${w}"`, {
@@ -553,8 +666,8 @@ export default function Home() {
   }
 
   const handleReset = () => {
-    setWords(Array(12).fill(''))
-    setInputValues(Array(12).fill(''))
+    setWords(Array(wordCount).fill(''))
+    setInputValues(Array(wordCount).fill(''))
     setKnownAddress('')
     setJobId(null)
     setJobStatus(null)
@@ -571,6 +684,37 @@ export default function Home() {
     }
   }
 
+  const handleExportResult = () => {
+    if (jobStatus?.result && jobStatus.result.length > 0) {
+      const result = jobStatus.result[0]
+      const content = [
+        'CryptoRecover - Recovery Result',
+        '================================',
+        `Date: ${new Date().toISOString()}`,
+        `Blockchain: ${BLOCKCHAIN_CONFIG[blockchain].name}`,
+        `Derivation Path: ${derivationPath}`,
+        `Wallet Address: ${knownAddress}`,
+        '',
+        'Recovered Seed Phrase:',
+        result,
+        '',
+        'IMPORTANT: Store this securely and delete this file after use.',
+        'This file was generated by CryptoRecover for legitimate self-recovery only.',
+      ].join('\n')
+      
+      const blob = new Blob([content], { type: 'text/plain' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `cryptorecover-${blockchain}-${Date.now()}.txt`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      toast.success('Recovery result exported')
+    }
+  }
+
   const handleVerify = async () => {
     if (!verifyMnemonic.trim()) {
       toast.error('Seed phrase is required')
@@ -578,6 +722,12 @@ export default function Home() {
     }
     if (!verifyAddress.trim()) {
       toast.error('Wallet address is required')
+      return
+    }
+    if (verifyAddressValidation && !verifyAddressValidation.valid) {
+      toast.error('Invalid wallet address format', {
+        description: verifyAddressValidation.hint,
+      })
       return
     }
     setIsVerifying(true)
@@ -610,31 +760,42 @@ export default function Home() {
 
   return (
     <div className="min-h-screen flex flex-col bg-zinc-950 text-zinc-100">
+      {/* ── Background Grid ── */}
+      <div className="fixed inset-0 z-0 pointer-events-none">
+        <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.02)_1px,transparent_1px)] bg-[size:64px_64px]" />
+        <div className="absolute top-0 left-1/4 w-96 h-96 bg-emerald-500/5 rounded-full blur-[128px]" />
+        <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-cyan-500/5 rounded-full blur-[128px]" />
+      </div>
+
       {/* ── Header ── */}
-      <header className="border-b border-zinc-800/60 bg-zinc-950/90 backdrop-blur-md sticky top-0 z-40">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 py-4 flex items-center gap-3">
-          <div className="flex items-center justify-center h-10 w-10 rounded-xl bg-gradient-to-br from-emerald-500/20 to-cyan-500/20 border border-emerald-500/30">
-            <Shield className="h-5 w-5 text-emerald-400" />
+      <header className="border-b border-zinc-800/60 bg-zinc-950/80 backdrop-blur-xl sticky top-0 z-40">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3 flex items-center gap-3">
+          <div className="flex items-center justify-center h-9 w-9 rounded-lg bg-gradient-to-br from-emerald-500/20 to-cyan-500/20 border border-emerald-500/30 shadow-lg shadow-emerald-500/5">
+            <Shield className="h-4.5 w-4.5 text-emerald-400" />
           </div>
           <div>
-            <h1 className="text-xl font-bold tracking-tight">
+            <h1 className="text-lg font-bold tracking-tight leading-tight">
               Crypto<span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-cyan-400">Recover</span>
             </h1>
-            <p className="text-[10px] text-zinc-500 tracking-wide">Legitimate Wallet Recovery Tool</p>
+            <p className="text-[9px] text-zinc-600 tracking-wider uppercase">Legitimate Wallet Recovery Tool</p>
           </div>
           <div className="ml-auto flex items-center gap-2">
             <Badge
               variant="outline"
-              className="border-emerald-500/30 text-emerald-400 bg-emerald-500/10 text-[10px] gap-1"
+              className="border-emerald-500/30 text-emerald-400 bg-emerald-500/10 text-[9px] gap-1 h-6"
             >
-              <Fingerprint className="h-3 w-3" />
+              <Lock className="h-2.5 w-2.5" />
               Own-Wallet Only
             </Badge>
             <Badge
               variant="outline"
-              className="border-cyan-500/30 text-cyan-400 bg-cyan-500/10 text-[10px] gap-1"
+              className={`text-[9px] gap-1 h-6 ${
+                wordlist.length > 0
+                  ? 'border-cyan-500/30 text-cyan-400 bg-cyan-500/10'
+                  : 'border-zinc-700 text-zinc-500 bg-zinc-900'
+              }`}
             >
-              <Activity className="h-3 w-3" />
+              <Activity className="h-2.5 w-2.5" />
               {wordlist.length > 0 ? 'Online' : 'Loading...'}
             </Badge>
           </div>
@@ -642,50 +803,66 @@ export default function Home() {
       </header>
 
       {/* ── Main Content ── */}
-      <main className="flex-1 max-w-5xl mx-auto px-4 sm:px-6 py-8 space-y-8 w-full">
-        {/* ── How It Works ── */}
+      <main className="flex-1 max-w-5xl mx-auto px-4 sm:px-6 py-6 space-y-6 w-full relative z-10">
+        {/* ── Hero / How It Works ── */}
         <section>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5 }}
+            className="text-center mb-6"
+          >
+            <h2 className="text-2xl sm:text-3xl font-bold tracking-tight bg-gradient-to-r from-zinc-100 via-zinc-300 to-zinc-100 bg-clip-text text-transparent">
+              Recover Your Crypto Wallet
+            </h2>
+            <p className="text-sm text-zinc-500 mt-2 max-w-xl mx-auto">
+              Lost some words from your seed phrase? Enter the ones you remember and we&apos;ll help you find the rest by matching against your known wallet address.
+            </p>
+          </motion.div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {[
               {
                 icon: <Key className="h-5 w-5 text-emerald-400" />,
                 step: '01',
                 title: 'Enter Partial Seed',
-                desc: 'Input your 12-word seed phrase, marking unknown words with the eye toggle.',
-                glow: 'from-emerald-500/10',
+                desc: 'Input your seed phrase, marking unknown words with the eye toggle.',
+                gradient: 'from-emerald-500/8 to-emerald-500/0',
+                border: 'hover:border-emerald-500/20',
               },
               {
                 icon: <Wallet className="h-5 w-5 text-cyan-400" />,
                 step: '02',
                 title: 'Provide Address',
                 desc: 'Enter your known wallet address for verification against derived addresses.',
-                glow: 'from-cyan-500/10',
+                gradient: 'from-cyan-500/8 to-cyan-500/0',
+                border: 'hover:border-cyan-500/20',
               },
               {
                 icon: <FileCheck className="h-5 w-5 text-teal-400" />,
                 step: '03',
                 title: 'Recover Wallet',
                 desc: 'We brute-force unknown words and verify against your known address.',
-                glow: 'from-teal-500/10',
+                gradient: 'from-teal-500/8 to-teal-500/0',
+                border: 'hover:border-teal-500/20',
               },
             ].map((item, idx) => (
               <motion.div
                 key={item.step}
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: idx * 0.1, duration: 0.4 }}
+                transition={{ delay: idx * 0.1 + 0.2, duration: 0.4 }}
               >
-                <Card className="bg-zinc-900/60 border-zinc-800/60 hover:border-zinc-700/80 transition-all duration-300 py-4 relative overflow-hidden group">
-                  <div className={`absolute inset-0 bg-gradient-to-b ${item.glow} to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500`} />
+                <Card className={`bg-zinc-900/40 border-zinc-800/50 ${item.border} transition-all duration-300 py-4 relative overflow-hidden group`}>
+                  <div className={`absolute inset-0 bg-gradient-to-b ${item.gradient} to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500`} />
                   <CardContent className="pt-0 flex flex-col items-center text-center gap-2 px-4 relative z-10">
-                    <div className="flex items-center justify-center h-10 w-10 rounded-full bg-zinc-800 border border-zinc-700">
+                    <div className="flex items-center justify-center h-9 w-9 rounded-full bg-zinc-800/80 border border-zinc-700/80 shadow-inner shadow-white/5">
                       {item.icon}
                     </div>
-                    <span className="text-[10px] font-bold text-zinc-600 uppercase tracking-widest">
+                    <span className="text-[9px] font-bold text-zinc-600 uppercase tracking-[0.2em]">
                       Step {item.step}
                     </span>
                     <h3 className="font-semibold text-sm text-zinc-200">{item.title}</h3>
-                    <p className="text-xs text-zinc-500 leading-relaxed">{item.desc}</p>
+                    <p className="text-[11px] text-zinc-500 leading-relaxed">{item.desc}</p>
                   </CardContent>
                 </Card>
               </motion.div>
@@ -693,14 +870,38 @@ export default function Home() {
           </div>
         </section>
 
-        <Separator className="bg-zinc-800/60" />
+        {/* ── Security Stats ── */}
+        <motion.section
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.5 }}
+        >
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {[
+              { icon: <Globe className="h-3.5 w-3.5" />, label: 'Blockchains', value: '4' },
+              { icon: <Database className="h-3.5 w-3.5" />, label: 'BIP39 Words', value: '2,048' },
+              { icon: <Cpu className="h-3.5 w-3.5" />, label: 'Derivation Paths', value: '9' },
+              { icon: <Lock className="h-3.5 w-3.5" />, label: 'Data Stored', value: 'None' },
+            ].map((stat) => (
+              <div key={stat.label} className="flex items-center gap-2.5 bg-zinc-900/30 border border-zinc-800/40 rounded-lg px-3 py-2.5">
+                <div className="text-zinc-500">{stat.icon}</div>
+                <div>
+                  <p className="text-xs font-semibold text-zinc-300">{stat.value}</p>
+                  <p className="text-[9px] text-zinc-600 uppercase tracking-wider">{stat.label}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </motion.section>
+
+        <Separator className="bg-zinc-800/40" />
 
         {/* ── Tab Navigation ── */}
-        <div className="flex gap-1 bg-zinc-900/60 p-1 rounded-xl border border-zinc-800/60">
+        <div className="flex gap-1 bg-zinc-900/40 p-1 rounded-xl border border-zinc-800/50">
           {([
-            { id: 'recover' as AppTab, label: 'Recovery', icon: <Search className="h-4 w-4" /> },
-            { id: 'verify' as AppTab, label: 'Quick Verify', icon: <CheckCircle2 className="h-4 w-4" /> },
-            { id: 'history' as AppTab, label: 'History', icon: <History className="h-4 w-4" /> },
+            { id: 'recover' as AppTab, label: 'Recovery', icon: <Search className="h-3.5 w-3.5" /> },
+            { id: 'verify' as AppTab, label: 'Quick Verify', icon: <CheckCircle2 className="h-3.5 w-3.5" /> },
+            { id: 'history' as AppTab, label: 'History', icon: <History className="h-3.5 w-3.5" /> },
           ] as const).map((tab) => (
             <button
               key={tab.id}
@@ -726,166 +927,207 @@ export default function Home() {
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 20 }}
               transition={{ duration: 0.2 }}
-              className="space-y-6"
+              className="space-y-5"
             >
               {/* ── Seed Phrase Input ── */}
-              <section>
-                <div className="flex items-center gap-2 mb-4">
-                  <Key className="h-4 w-4 text-emerald-400" />
-                  <h2 className="text-lg font-semibold">Seed Phrase</h2>
-                  <div className="ml-auto flex items-center gap-2">
-                    <Badge
-                      variant="outline"
-                      className={`text-[10px] gap-1 transition-colors ${
-                        knownCount >= 8
-                          ? 'border-emerald-500/30 text-emerald-400 bg-emerald-500/10'
-                          : 'border-amber-500/30 text-amber-400 bg-amber-500/10'
-                      }`}
-                    >
-                      <Check className="h-3 w-3" />
-                      {knownCount} known
-                    </Badge>
-                    <Badge
-                      variant="outline"
-                      className={`text-[10px] gap-1 ${
-                        unknownCount > 0
-                          ? 'border-amber-500/30 text-amber-400 bg-amber-500/10'
-                          : 'border-zinc-700 text-zinc-500 bg-zinc-900'
-                      }`}
-                    >
-                      <EyeOff className="h-3 w-3" />
-                      {unknownCount} unknown
-                    </Badge>
+              <Card className="bg-zinc-900/40 border-zinc-800/50 overflow-hidden">
+                <CardHeader className="pb-3">
+                  <div className="flex items-center gap-2">
+                    <Key className="h-4 w-4 text-emerald-400" />
+                    <CardTitle className="text-base font-semibold">Seed Phrase</CardTitle>
+                    <div className="ml-auto flex items-center gap-2">
+                      <Badge
+                        variant="outline"
+                        className={`text-[9px] gap-1 h-5 transition-colors ${
+                          knownCount >= (wordCount === 12 ? 8 : 16)
+                            ? 'border-emerald-500/30 text-emerald-400 bg-emerald-500/10'
+                            : 'border-amber-500/30 text-amber-400 bg-amber-500/10'
+                        }`}
+                      >
+                        <Check className="h-2.5 w-2.5" />
+                        {knownCount} known
+                      </Badge>
+                      <Badge
+                        variant="outline"
+                        className={`text-[9px] gap-1 h-5 ${
+                          unknownCount > 0
+                            ? 'border-amber-500/30 text-amber-400 bg-amber-500/10'
+                            : 'border-zinc-700 text-zinc-500 bg-zinc-900'
+                        }`}
+                      >
+                        <EyeOff className="h-2.5 w-2.5" />
+                        {unknownCount} unknown
+                      </Badge>
+                    </div>
                   </div>
-                </div>
-                <p className="text-xs text-zinc-500 mb-4">
-                  Enter the words you remember. Click the eye icon to mark words as unknown.
-                  At least <span className="text-emerald-400 font-semibold">8 known words</span> are
-                  required.
-                </p>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 sm:gap-3">
-                  {Array.from({ length: 12 }).map((_, i) => (
-                    <WordInput
-                      key={i}
-                      index={i}
-                      value={inputValues[i]}
-                      isUnknown={words[i] === null}
-                      onValueChange={(val) => handleWordChange(i, val)}
-                      onToggleUnknown={() => handleToggleUnknown(i)}
-                      wordlist={wordlist}
-                    />
-                  ))}
-                </div>
-                {knownCount < 8 && (
-                  <motion.p
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    className="mt-3 text-xs text-amber-400/80 flex items-center gap-1"
-                  >
-                    <AlertTriangle className="h-3 w-3" />
-                    Need at least {8 - knownCount} more known word{(8 - knownCount) !== 1 ? 's' : ''} to
-                    proceed
-                  </motion.p>
-                )}
-                {unknownCount > 0 && knownCount >= 8 && (
-                  <motion.p
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    className="mt-3 text-xs text-cyan-400/80 flex items-center gap-1"
-                  >
-                    <Timer className="h-3 w-3" />
-                    Estimated search: ~{formatTime(estimatedSeconds)} ({formatNumber(Math.pow(2048, unknownCount))} combinations)
-                  </motion.p>
-                )}
-              </section>
-
-              <Separator className="bg-zinc-800/60" />
+                  <div className="flex items-center justify-between">
+                    <CardDescription className="text-xs text-zinc-500">
+                      Enter the words you remember. Click the eye icon to mark unknown words.
+                    </CardDescription>
+                    {/* Word count toggle */}
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-zinc-600">12</span>
+                      <Switch
+                        checked={wordCount === 24}
+                        onCheckedChange={(checked) => handleWordCountChange(checked ? 24 : 12)}
+                        className="scale-75"
+                      />
+                      <span className="text-[10px] text-zinc-600">24</span>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="pt-0">
+                  {knownCount < (wordCount === 12 ? 8 : 16) && (
+                    <motion.p
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      className="mb-3 text-[11px] text-amber-400/80 flex items-center gap-1"
+                    >
+                      <AlertTriangle className="h-3 w-3" />
+                      Need at least {wordCount === 12 ? 8 : 16} known words to proceed ({knownCount}/{wordCount === 12 ? 8 : 16})
+                    </motion.p>
+                  )}
+                  <div className={`grid gap-2 ${
+                    wordCount === 12
+                      ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4'
+                      : 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6'
+                  }`}>
+                    {Array.from({ length: wordCount }).map((_, i) => (
+                      <WordInput
+                        key={i}
+                        index={i}
+                        value={inputValues[i]}
+                        isUnknown={words[i] === null}
+                        onValueChange={(val) => handleWordChange(i, val)}
+                        onToggleUnknown={() => handleToggleUnknown(i)}
+                        wordlist={wordlist}
+                        onNext={() => focusNextInput(i)}
+                      />
+                    ))}
+                  </div>
+                  {unknownCount > 0 && knownCount >= (wordCount === 12 ? 8 : 16) && (
+                    <motion.p
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      className="mt-3 text-[11px] text-cyan-400/80 flex items-center gap-1"
+                    >
+                      <Timer className="h-3 w-3" />
+                      Estimated search: ~{formatTime(estimatedSeconds)} ({formatNumber(Math.pow(2048, unknownCount))} combinations)
+                    </motion.p>
+                  )}
+                </CardContent>
+              </Card>
 
               {/* ── Configuration ── */}
-              <section className="space-y-6">
-                {/* Blockchain Selector */}
-                <div>
-                  <div className="flex items-center gap-2 mb-3">
+              <Card className="bg-zinc-900/40 border-zinc-800/50">
+                <CardHeader className="pb-3">
+                  <div className="flex items-center gap-2">
                     <Wallet className="h-4 w-4 text-emerald-400" />
-                    <h2 className="text-lg font-semibold">Blockchain</h2>
+                    <CardTitle className="text-base font-semibold">Configuration</CardTitle>
                   </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
-                    {(Object.entries(BLOCKCHAIN_CONFIG) as [Blockchain, typeof BLOCKCHAIN_CONFIG[Blockchain]][]).map(
-                      ([key, config]) => (
-                        <button
-                          key={key}
-                          onClick={() => handleBlockchainChange(key)}
-                          className={`flex flex-col items-center gap-1.5 p-3 sm:p-4 rounded-xl border-2 transition-all duration-200 cursor-pointer relative overflow-hidden group ${
-                            blockchain === key
-                              ? config.accentBg + ' ' + config.accent
-                              : 'border-zinc-800 bg-zinc-900/40 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900/60'
+                </CardHeader>
+                <CardContent className="pt-0 space-y-5">
+                  {/* Blockchain Selector */}
+                  <div>
+                    <label className="text-xs font-medium text-zinc-400 mb-2 block">Blockchain Network</label>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {(Object.entries(BLOCKCHAIN_CONFIG) as [Blockchain, typeof BLOCKCHAIN_CONFIG[Blockchain]][]).map(
+                        ([key, config]) => (
+                          <button
+                            key={key}
+                            onClick={() => handleBlockchainChange(key)}
+                            className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all duration-200 cursor-pointer relative overflow-hidden group ${
+                              blockchain === key
+                                ? config.accentBg + ' ' + config.accent
+                                : 'border-zinc-800/60 bg-zinc-900/30 text-zinc-500 hover:border-zinc-700 hover:bg-zinc-900/50'
+                            }`}
+                          >
+                            {blockchain === key && (
+                              <motion.div
+                                layoutId="blockchain-glow"
+                                className={`absolute inset-0 bg-gradient-to-b ${
+                                  key === 'btc' ? 'from-orange-500/5' :
+                                  key === 'eth' ? 'from-emerald-500/5' :
+                                  key === 'sol' ? 'from-cyan-500/5' :
+                                  'from-teal-500/5'
+                                } to-transparent`}
+                              />
+                            )}
+                            <span className="text-xl relative z-10">{config.icon}</span>
+                            <span className="text-xs font-semibold relative z-10">{config.symbol}</span>
+                            <span className="text-[9px] text-zinc-500 relative z-10">{config.name}</span>
+                          </button>
+                        )
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Derivation Path */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <label className="text-xs font-medium text-zinc-400">Derivation Path</label>
+                      <Badge variant="outline" className="text-[8px] border-zinc-700 text-zinc-500 h-4 px-1.5">
+                        Advanced
+                      </Badge>
+                      <TooltipProvider delayDuration={300}>
+                        <Tooltip>
+                          <TooltipTrigger>
+                            <Info className="h-3 w-3 text-zinc-600" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="max-w-xs text-xs">
+                            The derivation path defines how your seed phrase converts to a wallet address. Different wallets use different paths.
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </div>
+                    <Select value={derivationPath} onValueChange={setDerivationPath}>
+                      <SelectTrigger className="bg-zinc-900/80 border-zinc-800 text-zinc-100 font-mono text-xs h-9">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="bg-zinc-800 border-zinc-700">
+                        {BLOCKCHAIN_CONFIG[blockchain].paths.map((p) => (
+                          <SelectItem key={p.path} value={p.path} className="font-mono text-xs">
+                            <span className="text-zinc-400">{p.label}:</span>{' '}
+                            <span className="text-emerald-400">{p.path}</span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Known Address */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <label className="text-xs font-medium text-zinc-400">Known Wallet Address</label>
+                      {addressValidation && (
+                        <Badge
+                          variant="outline"
+                          className={`text-[8px] h-4 px-1.5 ${
+                            addressValidation.valid
+                              ? 'border-emerald-500/30 text-emerald-400'
+                              : 'border-red-500/30 text-red-400'
                           }`}
                         >
-                          {blockchain === key && (
-                            <motion.div
-                              layoutId="blockchain-glow"
-                              className={`absolute inset-0 bg-gradient-to-b ${
-                                key === 'btc' ? 'from-orange-500/5' :
-                                key === 'eth' ? 'from-emerald-500/5' :
-                                key === 'sol' ? 'from-cyan-500/5' :
-                                'from-teal-500/5'
-                              } to-transparent`}
-                            />
-                          )}
-                          <span className="text-2xl relative z-10">{config.icon}</span>
-                          <span className="text-sm font-semibold relative z-10">{config.symbol}</span>
-                          <span className="text-[10px] text-zinc-500 relative z-10">{config.name}</span>
-                        </button>
-                      )
-                    )}
+                          {addressValidation.valid ? 'Valid' : 'Invalid'}
+                        </Badge>
+                      )}
+                    </div>
+                    <Input
+                      value={knownAddress}
+                      onChange={(e) => setKnownAddress(e.target.value)}
+                      placeholder={BLOCKCHAIN_CONFIG[blockchain].placeholder}
+                      disabled={isRunning}
+                      className={`h-11 bg-zinc-900/80 border-zinc-800 text-zinc-100 placeholder:text-zinc-600 font-mono text-sm focus:border-emerald-500/50 focus:ring-emerald-500/20 ${
+                        addressValidation && !addressValidation.valid ? 'border-red-500/40 focus:border-red-500/50' : ''
+                      }`}
+                    />
+                    <p className="mt-1.5 text-[10px] text-zinc-600 flex items-center gap-1">
+                      <ArrowRight className="h-2.5 w-2.5" />
+                      {BLOCKCHAIN_CONFIG[blockchain].hint}
+                    </p>
                   </div>
-                </div>
-
-                {/* Derivation Path */}
-                <div>
-                  <div className="flex items-center gap-2 mb-3">
-                    <Hash className="h-4 w-4 text-emerald-400" />
-                    <h2 className="text-sm font-semibold">Derivation Path</h2>
-                    <Badge variant="outline" className="text-[9px] border-zinc-700 text-zinc-500">
-                      Advanced
-                    </Badge>
-                  </div>
-                  <Select value={derivationPath} onValueChange={setDerivationPath}>
-                    <SelectTrigger className="bg-zinc-900/80 border-zinc-700 text-zinc-100 font-mono text-xs h-10">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent className="bg-zinc-800 border-zinc-700">
-                      {BLOCKCHAIN_CONFIG[blockchain].paths.map((p) => (
-                        <SelectItem key={p.path + p.label} value={p.path} className="font-mono text-xs">
-                          <span className="text-zinc-400">{p.label}:</span>{' '}
-                          <span className="text-emerald-400">{p.path}</span>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* Known Address */}
-                <div>
-                  <div className="flex items-center gap-2 mb-3">
-                    <Fingerprint className="h-4 w-4 text-emerald-400" />
-                    <h2 className="text-lg font-semibold">Known Wallet Address</h2>
-                  </div>
-                  <Input
-                    value={knownAddress}
-                    onChange={(e) => setKnownAddress(e.target.value)}
-                    placeholder={BLOCKCHAIN_CONFIG[blockchain].placeholder}
-                    disabled={isRunning}
-                    className="h-12 bg-zinc-900/80 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 font-mono text-sm focus:border-emerald-500/50 focus:ring-emerald-500/20"
-                  />
-                  <p className="mt-2 text-xs text-zinc-500 flex items-center gap-1">
-                    <ArrowRight className="h-3 w-3" />
-                    {BLOCKCHAIN_CONFIG[blockchain].hint}
-                  </p>
-                </div>
-              </section>
-
-              <Separator className="bg-zinc-800/60" />
+                </CardContent>
+              </Card>
 
               {/* ── Estimate Warning ── */}
               <AnimatePresence>
@@ -895,7 +1137,7 @@ export default function Home() {
                     animate={{ opacity: 1, height: 'auto' }}
                     exit={{ opacity: 0, height: 0 }}
                   >
-                    <Card className="bg-amber-950/30 border-amber-500/30 mb-4">
+                    <Card className="bg-amber-950/20 border-amber-500/30">
                       <CardContent className="flex gap-3 px-4 py-3">
                         <AlertTriangle className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
                         <div className="space-y-1">
@@ -936,8 +1178,8 @@ export default function Home() {
                 {!isRunning && !isCompleted && !isFailed && !isStopped ? (
                   <Button
                     onClick={handleStartRecovery}
-                    disabled={isStarting || knownCount < 8 || !knownAddress.trim() || showEstimateWarning}
-                    className="flex-1 h-12 bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white font-semibold text-sm transition-all duration-200 shadow-lg shadow-emerald-500/20 hover:shadow-emerald-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={isStarting || knownCount < (wordCount === 12 ? 8 : 16) || !knownAddress.trim() || showEstimateWarning || (addressValidation !== null && !addressValidation.valid)}
+                    className="flex-1 h-12 bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white font-semibold text-sm transition-all duration-200 shadow-lg shadow-emerald-500/20 hover:shadow-emerald-500/30 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl"
                   >
                     {isStarting ? (
                       <>
@@ -955,7 +1197,7 @@ export default function Home() {
                   <Button
                     onClick={handleStopRecovery}
                     variant="destructive"
-                    className="flex-1 h-12 font-semibold text-sm transition-all duration-200"
+                    className="flex-1 h-12 font-semibold text-sm transition-all duration-200 rounded-xl"
                   >
                     <StopCircle className="h-4 w-4" />
                     Stop Recovery
@@ -966,7 +1208,7 @@ export default function Home() {
                   <Button
                     onClick={handleReset}
                     variant="outline"
-                    className="flex-1 h-12 border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 font-semibold text-sm transition-all duration-200"
+                    className="flex-1 h-12 border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 font-semibold text-sm transition-all duration-200 rounded-xl"
                   >
                     <RotateCcw className="h-4 w-4" />
                     Start New Recovery
@@ -982,7 +1224,7 @@ export default function Home() {
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -20 }}
                   >
-                    <Card className="bg-zinc-900/60 border-zinc-800/60 overflow-hidden relative">
+                    <Card className="bg-zinc-900/40 border-zinc-800/50 overflow-hidden relative">
                       <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-emerald-500 via-cyan-500 to-teal-500 animate-pulse" />
                       <CardHeader className="pb-2">
                         <div className="flex items-center gap-2">
@@ -990,8 +1232,8 @@ export default function Home() {
                           <CardTitle className="text-sm font-semibold text-zinc-200">
                             Recovery In Progress
                           </CardTitle>
-                          <Badge variant="outline" className="ml-auto text-[9px] border-emerald-500/30 text-emerald-400">
-                            <Activity className="h-3 w-3 mr-1" />
+                          <Badge variant="outline" className="ml-auto text-[8px] border-emerald-500/30 text-emerald-400 h-5">
+                            <Activity className="h-2.5 w-2.5 mr-0.5" />
                             Live
                           </Badge>
                         </div>
@@ -1010,23 +1252,23 @@ export default function Home() {
                           <div className="relative">
                             <Progress
                               value={progressPct}
-                              className="h-3 bg-zinc-800 [&>div]:bg-gradient-to-r [&>div]:from-emerald-500 [&>div]:to-cyan-500"
+                              className="h-2.5 bg-zinc-800 [&>div]:bg-gradient-to-r [&>div]:from-emerald-500 [&>div]:to-cyan-500"
                             />
                           </div>
                         </div>
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                           {[
                             { icon: <Zap className="h-3 w-3 text-emerald-400" />, label: 'Speed', value: `${formatNumber(jobStatus.speed)}/s` },
                             { icon: <Search className="h-3 w-3 text-cyan-400" />, label: 'Checked', value: formatNumber(jobStatus.progress) },
                             { icon: <Clock className="h-3 w-3 text-amber-400" />, label: 'ETA', value: formatTime(etaSeconds) },
                             { icon: <Sparkles className="h-3 w-3 text-teal-400" />, label: 'Elapsed', value: formatTime(elapsedSeconds) },
                           ].map((stat) => (
-                            <div key={stat.label} className="bg-zinc-800/50 rounded-lg p-3 text-center border border-zinc-800/50">
-                              <div className="flex items-center justify-center gap-1 text-[10px] text-zinc-500 uppercase tracking-wider mb-1">
+                            <div key={stat.label} className="bg-zinc-800/40 rounded-lg p-2.5 text-center border border-zinc-800/40">
+                              <div className="flex items-center justify-center gap-1 text-[9px] text-zinc-500 uppercase tracking-wider mb-0.5">
                                 {stat.icon}
                                 {stat.label}
                               </div>
-                              <p className="text-sm font-semibold text-zinc-200">{stat.value}</p>
+                              <p className="text-xs font-semibold text-zinc-200">{stat.value}</p>
                             </div>
                           ))}
                         </div>
@@ -1045,7 +1287,7 @@ export default function Home() {
                     exit={{ opacity: 0, scale: 0.95 }}
                   >
                     {jobStatus.result && jobStatus.result.length > 0 ? (
-                      <Card className="bg-emerald-950/30 border-emerald-500/30 overflow-hidden relative">
+                      <Card className="bg-emerald-950/20 border-emerald-500/30 overflow-hidden relative">
                         <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-emerald-500 via-cyan-500 to-teal-500" />
                         <CardHeader className="pb-2">
                           <div className="flex items-center gap-2">
@@ -1065,27 +1307,31 @@ export default function Home() {
                         </CardHeader>
                         <CardContent className="space-y-4 pt-0">
                           <div className="bg-zinc-900/80 rounded-xl p-4 border border-emerald-500/20">
-                            <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-3 font-semibold">
+                            <p className="text-[9px] text-zinc-500 uppercase tracking-wider mb-3 font-semibold">
                               Recovered Seed Phrase
                             </p>
-                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                            <div className={`grid gap-1.5 ${
+                              wordCount === 12
+                                ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4'
+                                : 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6'
+                            }`}>
                               {jobStatus.result[0].split(' ').map((word, i) => (
                                 <motion.div
                                   key={i}
                                   initial={{ opacity: 0, y: 10 }}
                                   animate={{ opacity: 1, y: 0 }}
-                                  transition={{ delay: i * 0.05 }}
-                                  className={`flex items-center gap-2 rounded-lg px-3 py-2 border ${
+                                  transition={{ delay: i * 0.03 }}
+                                  className={`flex items-center gap-2 rounded-lg px-2.5 py-1.5 border ${
                                     words[i] === null
                                       ? 'bg-emerald-500/10 border-emerald-500/30'
                                       : 'bg-zinc-800/80 border-zinc-700/50'
                                   }`}
                                 >
-                                  <span className="text-[10px] text-zinc-600 font-bold min-w-[16px]">
+                                  <span className="text-[9px] text-zinc-600 font-bold min-w-[14px]">
                                     {i + 1}
                                   </span>
-                                  <span className={`font-mono text-sm font-medium ${
-                                    words[i] === null ? 'text-emerald-300' : 'text-zinc-300'
+                                  <span className={`font-mono text-xs font-medium ${
+                                    words[i] === null ? 'text-emerald-300' : 'text-zinc-400'
                                   }`}>
                                     {word}
                                   </span>
@@ -1096,7 +1342,7 @@ export default function Home() {
                           <div className="flex gap-2">
                             <Button
                               onClick={handleCopyResult}
-                              className="flex-1 h-11 bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white font-semibold text-sm shadow-lg shadow-emerald-500/20"
+                              className="flex-1 h-11 bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white font-semibold text-sm shadow-lg shadow-emerald-500/20 rounded-xl"
                             >
                               {copied ? (
                                 <>
@@ -1110,11 +1356,19 @@ export default function Home() {
                                 </>
                               )}
                             </Button>
+                            <Button
+                              onClick={handleExportResult}
+                              variant="outline"
+                              className="h-11 border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 font-semibold text-sm rounded-xl"
+                            >
+                              <Download className="h-4 w-4" />
+                              <span className="hidden sm:inline">Export</span>
+                            </Button>
                           </div>
                         </CardContent>
                       </Card>
                     ) : (
-                      <Card className="bg-zinc-900/60 border-zinc-800/60">
+                      <Card className="bg-zinc-900/40 border-zinc-800/50">
                         <CardHeader className="pb-2">
                           <div className="flex items-center gap-2">
                             <AlertTriangle className="h-5 w-5 text-amber-400" />
@@ -1127,7 +1381,7 @@ export default function Home() {
                           </CardDescription>
                         </CardHeader>
                         <CardContent className="pt-0">
-                          <div className="bg-zinc-800/50 rounded-lg p-4 space-y-2">
+                          <div className="bg-zinc-800/30 rounded-lg p-4 space-y-2">
                             <p className="text-xs text-zinc-400">This could mean:</p>
                             <ul className="text-xs text-zinc-500 space-y-1 list-disc list-inside">
                               <li>One or more known words are incorrect</li>
@@ -1145,7 +1399,7 @@ export default function Home() {
 
               {/* ── Failed Display ── */}
               {isFailed && (
-                <Card className="bg-red-950/20 border-red-500/30">
+                <Card className="bg-red-950/10 border-red-500/20">
                   <CardHeader className="pb-2">
                     <div className="flex items-center gap-2">
                       <AlertTriangle className="h-5 w-5 text-red-400" />
@@ -1160,7 +1414,7 @@ export default function Home() {
 
               {/* ── Stopped Display ── */}
               {isStopped && (
-                <Card className="bg-zinc-900/60 border-zinc-800/60">
+                <Card className="bg-zinc-900/40 border-zinc-800/50">
                   <CardHeader className="pb-2">
                     <div className="flex items-center gap-2">
                       <StopCircle className="h-5 w-5 text-zinc-400" />
@@ -1189,13 +1443,13 @@ export default function Home() {
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 20 }}
               transition={{ duration: 0.2 }}
-              className="space-y-6"
+              className="space-y-5"
             >
-              <Card className="bg-zinc-900/60 border-zinc-800/60">
+              <Card className="bg-zinc-900/40 border-zinc-800/50">
                 <CardHeader>
                   <div className="flex items-center gap-2">
                     <CheckCircle2 className="h-5 w-5 text-emerald-400" />
-                    <CardTitle className="text-lg">Quick Verify</CardTitle>
+                    <CardTitle className="text-base">Quick Verify</CardTitle>
                   </div>
                   <CardDescription className="text-xs text-zinc-500">
                     Already have a complete seed phrase? Verify it matches your wallet address instantly.
@@ -1203,12 +1457,12 @@ export default function Home() {
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div>
-                    <label className="text-xs font-medium text-zinc-400 mb-2 block">Seed Phrase (12 words)</label>
+                    <label className="text-xs font-medium text-zinc-400 mb-2 block">Seed Phrase (12 or 24 words)</label>
                     <textarea
                       value={verifyMnemonic}
                       onChange={(e) => setVerifyMnemonic(e.target.value)}
-                      placeholder="Enter your 12-word seed phrase separated by spaces..."
-                      className="w-full h-24 bg-zinc-900/80 border border-zinc-700 rounded-lg px-4 py-3 text-sm font-mono text-zinc-100 placeholder:text-zinc-600 focus:border-emerald-500/50 focus:ring-emerald-500/20 resize-none"
+                      placeholder="Enter your seed phrase separated by spaces..."
+                      className="w-full h-24 bg-zinc-900/80 border border-zinc-800 rounded-xl px-4 py-3 text-sm font-mono text-zinc-100 placeholder:text-zinc-600 focus:border-emerald-500/50 focus:ring-emerald-500/20 resize-none"
                     />
                   </div>
 
@@ -1223,7 +1477,7 @@ export default function Home() {
                             className={`flex items-center justify-center gap-1.5 p-2.5 rounded-lg border transition-all duration-200 text-xs font-medium ${
                               verifyBlockchain === key
                                 ? config.accentBg + ' ' + config.accent
-                                : 'border-zinc-800 bg-zinc-900/40 text-zinc-500 hover:border-zinc-700'
+                                : 'border-zinc-800/60 bg-zinc-900/30 text-zinc-500 hover:border-zinc-700'
                             }`}
                           >
                             <span>{config.icon}</span>
@@ -1235,19 +1489,35 @@ export default function Home() {
                   </div>
 
                   <div>
-                    <label className="text-xs font-medium text-zinc-400 mb-2 block">Wallet Address</label>
+                    <div className="flex items-center gap-2 mb-2">
+                      <label className="text-xs font-medium text-zinc-400">Wallet Address</label>
+                      {verifyAddressValidation && (
+                        <Badge
+                          variant="outline"
+                          className={`text-[8px] h-4 px-1.5 ${
+                            verifyAddressValidation.valid
+                              ? 'border-emerald-500/30 text-emerald-400'
+                              : 'border-red-500/30 text-red-400'
+                          }`}
+                        >
+                          {verifyAddressValidation.valid ? 'Valid' : 'Invalid'}
+                        </Badge>
+                      )}
+                    </div>
                     <Input
                       value={verifyAddress}
                       onChange={(e) => setVerifyAddress(e.target.value)}
                       placeholder={BLOCKCHAIN_CONFIG[verifyBlockchain].placeholder}
-                      className="h-11 bg-zinc-900/80 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 font-mono text-sm"
+                      className={`h-11 bg-zinc-900/80 border-zinc-800 text-zinc-100 placeholder:text-zinc-600 font-mono text-sm rounded-xl ${
+                        verifyAddressValidation && !verifyAddressValidation.valid ? 'border-red-500/40' : ''
+                      }`}
                     />
                   </div>
 
                   <Button
                     onClick={handleVerify}
-                    disabled={isVerifying || !verifyMnemonic.trim() || !verifyAddress.trim()}
-                    className="w-full h-12 bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white font-semibold text-sm shadow-lg shadow-emerald-500/20 disabled:opacity-50"
+                    disabled={isVerifying || !verifyMnemonic.trim() || !verifyAddress.trim() || (verifyAddressValidation !== null && !verifyAddressValidation.valid)}
+                    className="w-full h-12 bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white font-semibold text-sm shadow-lg shadow-emerald-500/20 disabled:opacity-50 rounded-xl"
                   >
                     {isVerifying ? (
                       <>
@@ -1271,7 +1541,7 @@ export default function Home() {
                         exit={{ opacity: 0, y: -10 }}
                       >
                         {verifyResult.match ? (
-                          <div className="bg-emerald-950/30 border border-emerald-500/30 rounded-xl p-4">
+                          <div className="bg-emerald-950/20 border border-emerald-500/30 rounded-xl p-4">
                             <div className="flex items-center gap-2 mb-2">
                               <CheckCircle2 className="h-5 w-5 text-emerald-400" />
                               <span className="font-semibold text-emerald-300">Match Found!</span>
@@ -1279,15 +1549,15 @@ export default function Home() {
                             <p className="text-xs text-zinc-400">
                               This seed phrase derives the address:
                             </p>
-                            <p className="text-xs font-mono text-emerald-300 mt-1 break-all">
+                            <p className="text-xs font-mono text-emerald-300 mt-1 break-all bg-zinc-900/60 rounded-lg p-2">
                               {verifyResult.address}
                             </p>
-                            <p className="text-xs text-emerald-400/60 mt-1">
+                            <p className="text-xs text-emerald-400/60 mt-1.5">
                               This matches your provided wallet address.
                             </p>
                           </div>
                         ) : verifyResult.valid ? (
-                          <div className="bg-amber-950/20 border border-amber-500/30 rounded-xl p-4">
+                          <div className="bg-amber-950/15 border border-amber-500/30 rounded-xl p-4">
                             <div className="flex items-center gap-2 mb-2">
                               <XCircle className="h-5 w-5 text-amber-400" />
                               <span className="font-semibold text-amber-300">No Match</span>
@@ -1295,15 +1565,15 @@ export default function Home() {
                             <p className="text-xs text-zinc-400">
                               The seed phrase is valid but derives a different address:
                             </p>
-                            <p className="text-xs font-mono text-amber-300 mt-1 break-all">
+                            <p className="text-xs font-mono text-amber-300 mt-1 break-all bg-zinc-900/60 rounded-lg p-2">
                               {verifyResult.address}
                             </p>
-                            <p className="text-xs text-zinc-500 mt-1">
+                            <p className="text-xs text-zinc-500 mt-1.5">
                               This does not match your provided wallet address. Check the blockchain or derivation path.
                             </p>
                           </div>
                         ) : (
-                          <div className="bg-red-950/20 border border-red-500/30 rounded-xl p-4">
+                          <div className="bg-red-950/10 border border-red-500/30 rounded-xl p-4">
                             <div className="flex items-center gap-2 mb-2">
                               <XCircle className="h-5 w-5 text-red-400" />
                               <span className="font-semibold text-red-300">Invalid Seed Phrase</span>
@@ -1331,11 +1601,11 @@ export default function Home() {
               transition={{ duration: 0.2 }}
               className="space-y-4"
             >
-              <Card className="bg-zinc-900/60 border-zinc-800/60">
+              <Card className="bg-zinc-900/40 border-zinc-800/50">
                 <CardHeader>
                   <div className="flex items-center gap-2">
                     <History className="h-5 w-5 text-emerald-400" />
-                    <CardTitle className="text-lg">Recovery History</CardTitle>
+                    <CardTitle className="text-base">Recovery History</CardTitle>
                   </div>
                   <CardDescription className="text-xs text-zinc-500">
                     View all recovery jobs from this session. Jobs are not persisted after server restart.
@@ -1344,18 +1614,18 @@ export default function Home() {
                 <CardContent>
                   {jobHistory.length === 0 ? (
                     <div className="text-center py-8">
-                      <History className="h-8 w-8 text-zinc-700 mx-auto mb-2" />
+                      <History className="h-8 w-8 text-zinc-800 mx-auto mb-2" />
                       <p className="text-sm text-zinc-500">No recovery jobs yet</p>
                       <p className="text-xs text-zinc-600">Start a recovery to see it here</p>
                     </div>
                   ) : (
-                    <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
+                    <div className="space-y-2 max-h-96 overflow-y-auto pr-1 scrollbar-thin">
                       {jobHistory
                         .sort((a, b) => b.startedAt - a.startedAt)
                         .map((job) => (
                           <div
                             key={job.id}
-                            className="bg-zinc-800/50 rounded-lg p-3 border border-zinc-800/50 space-y-2"
+                            className="bg-zinc-800/30 rounded-xl p-3 border border-zinc-800/40 space-y-2 hover:border-zinc-700/60 transition-colors"
                           >
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-2">
@@ -1364,14 +1634,14 @@ export default function Home() {
                                   <p className="text-xs font-medium text-zinc-300">
                                     {BLOCKCHAIN_CONFIG[job.blockchain].name} Recovery
                                   </p>
-                                  <p className="text-[10px] text-zinc-600 font-mono">
+                                  <p className="text-[9px] text-zinc-600 font-mono">
                                     {job.derivationPath}
                                   </p>
                                 </div>
                               </div>
                               <Badge
                                 variant="outline"
-                                className={`text-[9px] ${
+                                className={`text-[8px] h-5 ${
                                   job.status === 'completed'
                                     ? job.result && job.result.length > 0
                                       ? 'border-emerald-500/30 text-emerald-400'
@@ -1394,19 +1664,19 @@ export default function Home() {
                             </div>
                             <div className="flex items-center gap-4 text-[10px] text-zinc-500">
                               <span className="flex items-center gap-1">
-                                <Search className="h-3 w-3" />
+                                <Search className="h-2.5 w-2.5" />
                                 {formatNumber(job.progress)}/{formatNumber(job.total)}
                               </span>
                               <span className="flex items-center gap-1">
-                                <Zap className="h-3 w-3" />
+                                <Zap className="h-2.5 w-2.5" />
                                 {formatNumber(job.speed)}/s
                               </span>
                               <span className="flex items-center gap-1">
-                                <Clock className="h-3 w-3" />
+                                <Clock className="h-2.5 w-2.5" />
                                 {job.startedAt ? new Date(job.startedAt).toLocaleTimeString() : '—'}
                               </span>
                             </div>
-                            <p className="text-[10px] text-zinc-600 font-mono truncate">
+                            <p className="text-[9px] text-zinc-600 font-mono truncate">
                               {job.knownAddress}
                             </p>
                           </div>
@@ -1421,9 +1691,9 @@ export default function Home() {
 
         {/* ── FAQ Section ── */}
         <section>
-          <div className="flex items-center gap-2 mb-4">
+          <div className="flex items-center gap-2 mb-3">
             <HelpCircle className="h-4 w-4 text-emerald-400" />
-            <h2 className="text-lg font-semibold">FAQ</h2>
+            <h2 className="text-base font-semibold">Frequently Asked Questions</h2>
           </div>
           <div className="space-y-2">
             <FaqItem
@@ -1447,21 +1717,25 @@ export default function Home() {
               answer="Your seed phrase is processed entirely server-side in memory and is never persisted to disk or transmitted to third parties. Job data is stored in memory only and is lost when the server restarts. We strongly recommend copying your recovered seed phrase and storing it offline in a secure location."
             />
             <FaqItem
-              question="What is the Quick Verify feature?"
-              answer="Quick Verify allows you to instantly check if a complete 12-word seed phrase matches a specific wallet address. This is useful when you have a seed phrase but want to confirm it corresponds to a particular wallet address before importing it into a wallet application."
+              question="Does this tool support 24-word seed phrases?"
+              answer="Yes! You can toggle between 12-word and 24-word seed phrases using the switch above the word inputs. 24-word phrases provide stronger security (256-bit entropy vs 128-bit) but require at least 16 known words for practical recovery."
+            />
+            <FaqItem
+              question="What is the export feature?"
+              answer="After a successful recovery, you can export the result as a text file. The file includes the recovered seed phrase, blockchain, derivation path, and timestamp. We strongly recommend deleting this file after securely storing your seed phrase offline."
             />
           </div>
         </section>
 
         {/* ── Important Notice ── */}
         <section>
-          <Card className="bg-amber-950/20 border-amber-500/20">
+          <Card className="bg-amber-950/10 border-amber-500/15">
             <CardContent className="flex gap-3 px-4 py-4">
-              <AlertTriangle className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
+              <AlertTriangle className="h-5 w-5 text-amber-400/80 shrink-0 mt-0.5" />
               <div className="space-y-1.5">
-                <h3 className="text-sm font-semibold text-amber-300">Important Notice</h3>
+                <h3 className="text-sm font-semibold text-amber-300/90">Important Notice</h3>
                 <p className="text-xs text-zinc-400 leading-relaxed">
-                  This tool is designed <strong className="text-amber-300">exclusively</strong> for
+                  This tool is designed <strong className="text-amber-300/80">exclusively</strong> for
                   recovering your own wallets. It requires a known wallet address for verification
                   and only checks derived addresses against your provided address. It does not check
                   balances or attempt to access others&apos; wallets.
@@ -1478,17 +1752,17 @@ export default function Home() {
       </main>
 
       {/* ── Footer ── */}
-      <footer className="mt-auto border-t border-zinc-800/60 bg-zinc-950/90">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 py-4">
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-2">
+      <footer className="mt-auto border-t border-zinc-800/40 bg-zinc-950/80">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-1.5">
             <div className="flex items-center gap-2">
-              <Shield className="h-3.5 w-3.5 text-zinc-600" />
-              <span className="text-xs text-zinc-600">
+              <Shield className="h-3 w-3 text-zinc-700" />
+              <span className="text-[10px] text-zinc-600">
                 &copy; {new Date().getFullYear()} CryptoRecover
               </span>
             </div>
-            <p className="text-[10px] text-zinc-700 text-center sm:text-right">
-              For legitimate self-recovery only. Unauthorized use is prohibited. No data is stored after session ends.
+            <p className="text-[9px] text-zinc-700 text-center sm:text-right">
+              For legitimate self-recovery only. No data is stored after session ends.
             </p>
           </div>
         </div>
