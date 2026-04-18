@@ -60,6 +60,8 @@ import {
   ToggleRight,
   Info,
   ExternalLink,
+  Eye as EyeIcon,
+  MapPin,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -94,6 +96,21 @@ interface VerifyResult {
 interface PathOption {
   label: string
   path: string
+}
+
+interface PersistedHistoryEntry {
+  id: string
+  blockchain: Blockchain
+  derivationPath: string
+  knownAddress: string
+  found: boolean
+  timestamp: number
+}
+
+interface DeriveResult {
+  address: string
+  blockchain: string
+  derivationPath: string
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -446,6 +463,20 @@ export default function Home() {
   // Estimate warning state
   const [showEstimateWarning, setShowEstimateWarning] = useState(false)
 
+  // Persisted history state
+  const STORAGE_KEY = 'cryptorecover-history'
+  const [persistedHistory, setPersistedHistory] = useState<PersistedHistoryEntry[]>([])
+
+  // Derive preview state
+  const [deriveResult, setDeriveResult] = useState<DeriveResult | null>(null)
+  const [isDeriving, setIsDeriving] = useState(false)
+
+  // Confetti state
+  const [showConfetti, setShowConfetti] = useState(false)
+
+  // Results ref for auto-scroll
+  const resultsRef = useRef<HTMLDivElement>(null)
+
   // ── Address validation ──
   const addressValidation = useMemo(() => {
     if (!knownAddress.trim()) return null
@@ -464,6 +495,38 @@ export default function Home() {
       .then((data) => setWordlist(data.words || []))
       .catch(() => console.error('Failed to fetch wordlist'))
   }, [])
+
+  // ── Load persisted history on mount ──
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY)
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        if (Array.isArray(parsed)) setPersistedHistory(parsed)
+      }
+    } catch {
+      // ignore
+    }
+  }, [])
+
+  // ── Save to localStorage when a job completes ──
+  useEffect(() => {
+    if (jobStatus && (jobStatus.status === 'completed' || jobStatus.status === 'stopped') && jobStatus.result) {
+      const entry: PersistedHistoryEntry = {
+        id: jobStatus.id,
+        blockchain: jobStatus.blockchain,
+        derivationPath: jobStatus.derivationPath,
+        knownAddress: jobStatus.knownAddress,
+        found: jobStatus.result.length > 0,
+        timestamp: Date.now(),
+      }
+      setPersistedHistory(prev => {
+        const next = [entry, ...prev.filter(e => e.id !== entry.id)].slice(0, 50)
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)) } catch { /* ignore */ }
+        return next
+      })
+    }
+  }, [jobStatus, STORAGE_KEY])
 
   // ── Polling ──
   useEffect(() => {
@@ -527,6 +590,60 @@ export default function Home() {
     const total = Math.pow(2048, unknownCount)
     return total / 1000
   }, [unknownCount])
+
+  // ── Confetti and auto-scroll on success ──
+  useEffect(() => {
+    if (isCompleted && jobStatus && jobStatus.result && jobStatus.result.length > 0) {
+      setShowConfetti(true)
+      setTimeout(() => setShowConfetti(false), 3000)
+      setTimeout(() => {
+        resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }, 300)
+    }
+  }, [isCompleted, jobStatus])
+
+  // Check if all words are valid BIP39 words
+  const allWordsValid = useMemo(() => {
+    if (wordlist.length === 0) return false
+    return words.every((w) => w === null || (w && w.length > 0 && wordlist.includes(w)))
+  }, [words, wordlist])
+
+  // Count filled valid words
+  const validWordCount = useMemo(() => {
+    if (wordlist.length === 0) return 0
+    return words.filter((w) => w !== null && w.length > 0 && wordlist.includes(w)).length
+  }, [words, wordlist])
+
+  // Derive preview handler
+  const handleDerivePreview = async () => {
+    if (!verifyMnemonic.trim()) {
+      toast.error('Seed phrase is required')
+      return
+    }
+    setIsDeriving(true)
+    setDeriveResult(null)
+    try {
+      const res = await fetch('/api/derive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mnemonic: verifyMnemonic.trim(),
+          blockchain: verifyBlockchain,
+          derivationPath,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        toast.error(data.error || 'Derivation failed')
+        return
+      }
+      setDeriveResult(data)
+    } catch {
+      toast.error('Network error')
+    } finally {
+      setIsDeriving(false)
+    }
+  }
 
   // ── Handlers ──
   const handleWordCountChange = useCallback((count: 12 | 24) => {
@@ -673,6 +790,13 @@ export default function Home() {
     setJobStatus(null)
     setCopied(false)
     setShowEstimateWarning(false)
+    setShowConfetti(false)
+  }
+
+  const handleClearPersistedHistory = () => {
+    setPersistedHistory([])
+    try { localStorage.removeItem(STORAGE_KEY) } catch { /* ignore */ }
+    toast.success('History cleared')
   }
 
   const handleCopyResult = () => {
@@ -930,7 +1054,9 @@ export default function Home() {
               className="space-y-5"
             >
               {/* ── Seed Phrase Input ── */}
-              <Card className="bg-zinc-900/40 border-zinc-800/50 overflow-hidden">
+              <Card className={`bg-zinc-900/40 border-zinc-800/50 overflow-hidden transition-all duration-500 ${
+                allWordsValid && validWordCount === wordCount ? 'border-emerald-500/30 shadow-[0_0_15px_rgba(16,185,129,0.1)]' : ''
+              }`}>
                 <CardHeader className="pb-3">
                   <div className="flex items-center gap-2">
                     <Key className="h-4 w-4 text-emerald-400" />
@@ -944,7 +1070,11 @@ export default function Home() {
                             : 'border-amber-500/30 text-amber-400 bg-amber-500/10'
                         }`}
                       >
-                        <Check className="h-2.5 w-2.5" />
+                        {knownCount >= (wordCount === 12 ? 8 : 16) ? (
+                          <span className="checkmark-pop"><CheckCircle2 className="h-2.5 w-2.5" /></span>
+                        ) : (
+                          <Check className="h-2.5 w-2.5" />
+                        )}
                         {knownCount} known
                       </Badge>
                       <Badge
@@ -1074,8 +1204,13 @@ export default function Home() {
                           <TooltipTrigger>
                             <Info className="h-3 w-3 text-zinc-600" />
                           </TooltipTrigger>
-                          <TooltipContent side="top" className="max-w-xs text-xs">
-                            The derivation path defines how your seed phrase converts to a wallet address. Different wallets use different paths.
+                          <TooltipContent side="top" className="max-w-xs text-xs space-y-1.5">
+                            <p className="font-semibold text-zinc-200">What are derivation paths?</p>
+                            <p>A derivation path defines how your seed phrase is converted into a specific wallet address. Think of it as a map from your seed to a particular address.</p>
+                            <p className="font-semibold text-zinc-200">Why change paths?</p>
+                            <p>Different wallets use different paths. If the default path doesn&apos;t find your wallet, it may have been created with a different wallet that uses an alternative path.</p>
+                            <p className="font-semibold text-zinc-200">Which to try first?</p>
+                            <p>Start with the Standard/default path. If that doesn&apos;t match, try other paths listed for your blockchain. ETH users: try Ledger Live if you used a Ledger hardware wallet.</p>
                           </TooltipContent>
                         </Tooltip>
                       </TooltipProvider>
@@ -1282,12 +1417,35 @@ export default function Home() {
               <AnimatePresence>
                 {isCompleted && jobStatus && (
                   <motion.section
+                    ref={resultsRef}
                     initial={{ opacity: 0, scale: 0.95 }}
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.95 }}
                   >
                     {jobStatus.result && jobStatus.result.length > 0 ? (
-                      <Card className="bg-emerald-950/20 border-emerald-500/30 overflow-hidden relative">
+                      <Card className="bg-emerald-950/20 border-emerald-500/30 overflow-hidden relative success-glow">
+                        {/* Confetti particles */}
+                        {showConfetti && (
+                          <div className="absolute inset-0 overflow-hidden pointer-events-none z-10">
+                            {Array.from({ length: 30 }).map((_, i) => {
+                              const colors = ['bg-emerald-400', 'bg-cyan-400', 'bg-teal-400', 'bg-amber-400', 'bg-emerald-300']
+                              const animations = ['confetti-fall', 'confetti-left', 'confetti-right']
+                              return (
+                                <div
+                                  key={i}
+                                  className={`confetti-particle ${colors[i % colors.length]} ${animations[i % animations.length]}`}
+                                  style={{
+                                    left: `${Math.random() * 100}%`,
+                                    top: `${Math.random() * 30}%`,
+                                    animationDelay: `${Math.random() * 0.8}s`,
+                                    width: `${4 + Math.random() * 6}px`,
+                                    height: `${4 + Math.random() * 6}px`,
+                                  }}
+                                />
+                              )
+                            })}
+                          </div>
+                        )}
                         <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-emerald-500 via-cyan-500 to-teal-500" />
                         <CardHeader className="pb-2">
                           <div className="flex items-center gap-2">
@@ -1532,6 +1690,59 @@ export default function Home() {
                     )}
                   </Button>
 
+                  {/* Derive Preview Address */}
+                  <div className="border-t border-zinc-800/50 pt-4">
+                    <div className="flex items-center gap-2 mb-3">
+                      <MapPin className="h-4 w-4 text-cyan-400" />
+                      <span className="text-xs font-medium text-zinc-400">Address Preview</span>
+                      <TooltipProvider delayDuration={300}>
+                        <Tooltip>
+                          <TooltipTrigger>
+                            <Info className="h-3 w-3 text-zinc-600" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="max-w-xs text-xs">
+                            Enter a complete seed phrase and select a blockchain to see what address it derives — no known address required. Useful if you have a seed phrase but don&apos;t know which address it corresponds to.
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </div>
+                    <Button
+                      onClick={handleDerivePreview}
+                      disabled={isDeriving || !verifyMnemonic.trim()}
+                      variant="outline"
+                      className="w-full h-10 border-cyan-500/30 bg-cyan-500/5 text-cyan-400 hover:bg-cyan-500/10 hover:text-cyan-300 font-semibold text-sm rounded-xl disabled:opacity-50"
+                    >
+                      {isDeriving ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Deriving...
+                        </>
+                      ) : (
+                        <>
+                          <EyeIcon className="h-4 w-4" />
+                          Preview Address
+                        </>
+                      )}
+                    </Button>
+                    <AnimatePresence>
+                      {deriveResult && (
+                        <motion.div
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -10 }}
+                          className="mt-3 bg-cyan-950/15 border border-cyan-500/20 rounded-xl p-3"
+                        >
+                          <p className="text-[9px] text-zinc-500 uppercase tracking-wider mb-1 font-semibold">
+                            Derived Address ({BLOCKCHAIN_CONFIG[verifyBlockchain as Blockchain]?.symbol} · {deriveResult.derivationPath === 'default' ? 'Standard' : deriveResult.derivationPath})
+                          </p>
+                          <p className="text-xs font-mono text-cyan-300 break-all bg-zinc-900/60 rounded-lg p-2 select-all">
+                            {deriveResult.address}
+                          </p>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+
                   {/* Verify Result */}
                   <AnimatePresence>
                     {verifyResult && (
@@ -1606,20 +1817,72 @@ export default function Home() {
                   <div className="flex items-center gap-2">
                     <History className="h-5 w-5 text-emerald-400" />
                     <CardTitle className="text-base">Recovery History</CardTitle>
+                    {persistedHistory.length > 0 && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="ml-auto text-[9px] text-zinc-500 hover:text-red-400 h-6 px-2"
+                        onClick={handleClearPersistedHistory}
+                      >
+                        Clear All
+                      </Button>
+                    )}
                   </div>
                   <CardDescription className="text-xs text-zinc-500">
-                    View all recovery jobs from this session. Jobs are not persisted after server restart.
+                    Recovery results are persisted in your browser. Server-side jobs from this session are also shown.
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  {jobHistory.length === 0 ? (
+                  {jobHistory.length === 0 && persistedHistory.length === 0 ? (
                     <div className="text-center py-8">
                       <History className="h-8 w-8 text-zinc-800 mx-auto mb-2" />
                       <p className="text-sm text-zinc-500">No recovery jobs yet</p>
                       <p className="text-xs text-zinc-600">Start a recovery to see it here</p>
                     </div>
                   ) : (
-                    <div className="space-y-2 max-h-96 overflow-y-auto pr-1 scrollbar-thin">
+                    <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+                      {/* Persisted history entries */}
+                      {persistedHistory.map((entry) => (
+                        <div
+                          key={`persisted-${entry.id}`}
+                          className="bg-zinc-800/30 rounded-xl p-3 border border-zinc-800/40 space-y-2 hover:border-zinc-700/60 transition-colors"
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="text-lg">{BLOCKCHAIN_CONFIG[entry.blockchain]?.icon}</span>
+                              <div>
+                                <p className="text-xs font-medium text-zinc-300">
+                                  {BLOCKCHAIN_CONFIG[entry.blockchain]?.name} Recovery
+                                </p>
+                                <p className="text-[9px] text-zinc-600 font-mono">
+                                  {entry.derivationPath}
+                                </p>
+                              </div>
+                            </div>
+                            <Badge
+                              variant="outline"
+                              className={`text-[8px] h-5 ${
+                                entry.found
+                                  ? 'border-emerald-500/30 text-emerald-400'
+                                  : 'border-amber-500/30 text-amber-400'
+                              }`}
+                            >
+                              {entry.found ? 'Found' : 'No Match'}
+                            </Badge>
+                          </div>
+                          <div className="flex items-center gap-4 text-[10px] text-zinc-500">
+                            <span className="flex items-center gap-1">
+                              <Clock className="h-2.5 w-2.5" />
+                              {new Date(entry.timestamp).toLocaleString()}
+                            </span>
+                            <span className="text-zinc-600">persisted</span>
+                          </div>
+                          <p className="text-[9px] text-zinc-600 font-mono truncate">
+                            {entry.knownAddress}
+                          </p>
+                        </div>
+                      ))}
+                      {/* Server-side job history */}
                       {jobHistory
                         .sort((a, b) => b.startedAt - a.startedAt)
                         .map((job) => (
@@ -1675,6 +1938,7 @@ export default function Home() {
                                 <Clock className="h-2.5 w-2.5" />
                                 {job.startedAt ? new Date(job.startedAt).toLocaleTimeString() : '—'}
                               </span>
+                              <span className="text-zinc-600">session</span>
                             </div>
                             <p className="text-[9px] text-zinc-600 font-mono truncate">
                               {job.knownAddress}
