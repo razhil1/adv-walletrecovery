@@ -1,7 +1,7 @@
 # CryptoRecover - Work Log
 
 ## Project Status
-**v2.0 - Feature-rich with comprehensive styling** - All 4 blockchains (BTC, ETH, SOL, XRP) tested and working. Latest: Phase 5 - 6 new features (strength analyzer, keyboard shortcuts, theme toggle, multi-address verification, checksum-first mode, export history) + extensive styling improvements (animated gradient borders, floating dots, enhanced hero, improved footer, color-coded stats, card lift effects, pulse ring animation).
+**v2.1 - Performance Optimized + 3 New Features** - All 4 blockchains working. Latest: Performance fix (43 floating dots → pure CSS), BIP39 Word Dictionary tab, Recovery Event Log, Batch Derive All Paths, loading skeleton, theme-aware header/footer.
 
 ---
 Task ID: 5

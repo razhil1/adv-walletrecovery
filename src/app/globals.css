@@ -41,6 +41,16 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+  /* Custom CryptoRecover theme colors */
+  --color-cr-card: var(--cr-bg-card);
+  --color-cr-card-subtle: var(--cr-bg-card-subtle);
+  --color-cr-input: var(--cr-bg-input);
+  --color-cr-border: var(--cr-border);
+  --color-cr-border-subtle: var(--cr-border-subtle);
+  --color-cr-text: var(--cr-text-primary);
+  --color-cr-text-secondary: var(--cr-text-secondary);
+  --color-cr-text-muted: var(--cr-text-muted);
+  --color-cr-text-faint: var(--cr-text-faint);
 }
 
 :root {
@@ -76,6 +86,19 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+  /* CryptoRecover light mode vars */
+  --cr-bg-primary: #fafafa;
+  --cr-bg-card: #ffffff;
+  --cr-bg-card-subtle: #f4f4f5;
+  --cr-bg-input: #ffffff;
+  --cr-bg-hover: #f4f4f5;
+  --cr-bg-overlay: rgba(255, 255, 255, 0.95);
+  --cr-text-primary: #18181b;
+  --cr-text-secondary: #3f3f46;
+  --cr-text-muted: #71717a;
+  --cr-text-faint: #a1a1aa;
+  --cr-border: #e4e4e7;
+  --cr-border-subtle: #f4f4f5;
 }
 
 .dark {
@@ -110,6 +133,19 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+  /* CryptoRecover dark mode vars */
+  --cr-bg-primary: #09090b;
+  --cr-bg-card: rgba(24, 24, 27, 0.4);
+  --cr-bg-card-subtle: rgba(24, 24, 27, 0.3);
+  --cr-bg-input: rgba(24, 24, 27, 0.8);
+  --cr-bg-hover: rgba(39, 39, 42, 0.5);
+  --cr-bg-overlay: rgba(24, 24, 27, 0.95);
+  --cr-text-primary: #f4f4f5;
+  --cr-text-secondary: #d4d4d8;
+  --cr-text-muted: #71717a;
+  --cr-text-faint: #52525b;
+  --cr-border: rgba(39, 39, 42, 0.5);
+  --cr-border-subtle: rgba(39, 39, 42, 0.3);
 }
 
 @layer base {
@@ -141,6 +177,79 @@
 * {
   scrollbar-width: thin;
   scrollbar-color: #3f3f46 transparent;
+}
+
+/* Light mode scrollbar */
+html:not(.dark) ::-webkit-scrollbar-thumb {
+  background: #d4d4d8;
+}
+html:not(.dark) ::-webkit-scrollbar-thumb:hover {
+  background: #a1a1aa;
+}
+html:not(.dark) * {
+  scrollbar-color: #d4d4d8 transparent;
+}
+
+/* ─── Theme-Aware Utility Classes ──────────────────────────────────────────── */
+
+/* Card background - works in both light and dark mode */
+.cr-card {
+  background: var(--cr-bg-card);
+  border-color: var(--cr-border);
+}
+.cr-card-subtle {
+  background: var(--cr-bg-card-subtle);
+  border-color: var(--cr-border-subtle);
+}
+
+/* Input styling */
+.cr-input {
+  background: var(--cr-bg-input);
+  border-color: var(--cr-border);
+  color: var(--cr-text-primary);
+}
+.cr-input::placeholder {
+  color: var(--cr-text-muted);
+}
+
+/* Header/overlay background */
+.cr-header {
+  background: var(--cr-bg-overlay);
+  border-color: var(--cr-border);
+}
+
+/* Text color utilities */
+.cr-text-primary { color: var(--cr-text-primary); }
+.cr-text-secondary { color: var(--cr-text-secondary); }
+.cr-text-muted { color: var(--cr-text-muted); }
+.cr-text-faint { color: var(--cr-text-faint); }
+
+/* Border utilities */
+.cr-border { border-color: var(--cr-border); }
+.cr-border-subtle { border-color: var(--cr-border-subtle); }
+
+/* Hover background */
+.cr-hover:hover { background: var(--cr-bg-hover); }
+
+/* Card accent borders */
+.cr-accent-emerald {
+  border-left: 3px solid rgba(16, 185, 129, 0.4);
+}
+.cr-accent-cyan {
+  border-left: 3px solid rgba(6, 182, 212, 0.4);
+}
+
+/* Light mode card shadows */
+html:not(.dark) .cr-card,
+html:not(.dark) .cr-card-subtle {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+/* Light mode autocomplete dropdown */
+html:not(.dark) .cr-dropdown {
+  background: rgba(255, 255, 255, 0.98);
+  border-color: #e4e4e7;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
 /* Confetti animation keyframes */
@@ -232,52 +341,6 @@
   animation: checkmark-pop 0.3s ease-out forwards;
 }
 
-/* ─── Light Mode Overrides ──────────────────────────────────────────────────── */
-/* When .dark class is NOT present on html, apply light mode overrides */
-/* This works with next-themes toggling the .dark class */
-
-html:not(.dark) {
-  /* Override main backgrounds from zinc-950 to white/zinc-50 */
-  --cr-bg-primary: #fafafa;
-  --cr-bg-card: #ffffff;
-  --cr-bg-card-subtle: #f4f4f5;
-  --cr-bg-input: #ffffff;
-  --cr-bg-hover: #f4f4f5;
-  --cr-bg-overlay: rgba(255, 255, 255, 0.95);
-  --cr-text-primary: #18181b;
-  --cr-text-secondary: #3f3f46;
-  --cr-text-muted: #71717a;
-  --cr-text-faint: #a1a1aa;
-  --cr-border: #e4e4e7;
-  --cr-border-subtle: #f4f4f5;
-}
-
-.dark {
-  --cr-bg-primary: #09090b;
-  --cr-bg-card: rgba(24, 24, 27, 0.4);
-  --cr-bg-card-subtle: rgba(24, 24, 27, 0.3);
-  --cr-bg-input: rgba(24, 24, 27, 0.8);
-  --cr-bg-hover: rgba(39, 39, 42, 0.5);
-  --cr-bg-overlay: rgba(24, 24, 27, 0.95);
-  --cr-text-primary: #f4f4f5;
-  --cr-text-secondary: #d4d4d8;
-  --cr-text-muted: #71717a;
-  --cr-text-faint: #52525b;
-  --cr-border: rgba(39, 39, 42, 0.5);
-  --cr-border-subtle: rgba(39, 39, 42, 0.3);
-}
-
-/* Light mode scrollbar */
-html:not(.dark) ::-webkit-scrollbar-thumb {
-  background: #d4d4d8;
-}
-html:not(.dark) ::-webkit-scrollbar-thumb:hover {
-  background: #a1a1aa;
-}
-html:not(.dark) * {
-  scrollbar-color: #d4d4d8 transparent;
-}
-
 /* Animated gradient border for recovery in progress */
 @keyframes gradient-border-spin {
   0% {
@@ -322,7 +385,7 @@ html:not(.dark) * {
   inset: 0;
   z-index: -1;
   border-radius: inherit;
-  background: #18181b;
+  background: var(--cr-bg-card, #18181b);
 }
 
 /* Shimmer animation for selected blockchain button */
@@ -340,58 +403,30 @@ html:not(.dark) * {
   animation: shimmer 3s linear infinite;
 }
 
-/* Floating dots animation */
-@keyframes float-dot-1 {
-  0%, 100% {
-    transform: translate(0, 0);
-    opacity: 0.15;
-  }
-  25% {
-    transform: translate(30px, -20px);
-    opacity: 0.3;
-  }
-  50% {
-    transform: translate(-15px, -40px);
-    opacity: 0.15;
-  }
-  75% {
-    transform: translate(20px, -15px);
-    opacity: 0.25;
-  }
+/* ─── Optimized Background (replaces 43 floating dot DOM elements) ─── */
+.crypto-bg {
+  background:
+    /* Subtle grid */
+    linear-gradient(rgba(255,255,255,.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.02) 1px, transparent 1px),
+    /* Gradient orbs via radial gradients (GPU-composited, no DOM) */
+    radial-gradient(ellipse 500px 500px at 25% 10%, rgba(16,185,129,0.04), transparent),
+    radial-gradient(ellipse 500px 500px at 75% 90%, rgba(6,182,212,0.04), transparent),
+    radial-gradient(ellipse 600px 600px at 50% 50%, rgba(20,184,166,0.02), transparent);
+  background-size: 64px 64px, 64px 64px, 100% 100%, 100% 100%, 100% 100%;
+  will-change: auto;
+  contain: layout style;
 }
 
-@keyframes float-dot-2 {
-  0%, 100% {
-    transform: translate(0, 0);
-    opacity: 0.1;
-  }
-  33% {
-    transform: translate(-25px, -30px);
-    opacity: 0.25;
-  }
-  66% {
-    transform: translate(15px, -15px);
-    opacity: 0.1;
-  }
-}
-
-@keyframes float-dot-3 {
-  0%, 100% {
-    transform: translate(0, 0);
-    opacity: 0.2;
-  }
-  50% {
-    transform: translate(20px, -35px);
-    opacity: 0.1;
-  }
-}
-
-.floating-dot {
-  position: absolute;
-  width: 3px;
-  height: 3px;
-  border-radius: 50%;
-  pointer-events: none;
+/* Light mode background */
+html:not(.dark) .crypto-bg {
+  background:
+    linear-gradient(rgba(0,0,0,.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,0,0,.03) 1px, transparent 1px),
+    radial-gradient(ellipse 500px 500px at 25% 10%, rgba(16,185,129,0.06), transparent),
+    radial-gradient(ellipse 500px 500px at 75% 90%, rgba(6,182,212,0.06), transparent),
+    radial-gradient(ellipse 600px 600px at 50% 50%, rgba(20,184,166,0.03), transparent);
+  background-size: 64px 64px, 64px 64px, 100% 100%, 100% 100%, 100% 100%;
 }
 
 /* ─── Pulse Ring Animation for Progress Card ─── */
@@ -437,6 +472,9 @@ html:not(.dark) * {
   transform: translateY(-1px);
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
 }
+html:not(.dark) .card-lift:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+}
 
 /* ─── Step Connector Line ─── */
 .step-connector {
@@ -472,4 +510,41 @@ html:not(.dark) * {
     transform: scaleX(1);
     opacity: 1;
   }
+}
+
+/* ─── FAQ Hover Effect ─── */
+.faq-item {
+  transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+}
+.faq-item:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+html:not(.dark) .faq-item:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+/* ─── Word list grid item ─── */
+.word-grid-item {
+  transition: all 0.15s ease;
+}
+.word-grid-item:hover {
+  transform: translateY(-1px);
+}
+.word-grid-item:active {
+  transform: translateY(0);
+}
+
+/* ─── Recovery Log Entry Animation ─── */
+@keyframes log-slide-in {
+  0% {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.log-entry {
+  animation: log-slide-in 0.2s ease-out;
 }

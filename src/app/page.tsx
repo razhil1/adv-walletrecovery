@@ -95,7 +95,7 @@ import { Textarea } from '@/components/ui/textarea'
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 type Blockchain = 'btc' | 'eth' | 'sol' | 'xrp'
-type AppTab = 'recover' | 'verify' | 'history'
+type AppTab = 'recover' | 'verify' | 'history' | 'wordlist'
 
 interface RecoveryJob {
   id: string
@@ -555,6 +555,18 @@ export default function Home() {
   // Searching dots animation state
   const [searchingDots, setSearchingDots] = useState(0)
 
+  // Word list tab state
+  const [wordlistSearch, setWordlistSearch] = useState('')
+  const [wordlistCopiedIdx, setWordlistCopiedIdx] = useState<number | null>(null)
+
+  // Recovery event log state
+  const [recoveryLog, setRecoveryLog] = useState<{ time: number; msg: string }[]>([])
+  const recoveryLogRef = useRef<HTMLDivElement>(null)
+
+  // Batch derive state
+  const [batchDeriveResults, setBatchDeriveResults] = useState<{ path: string; label: string; address: string }[]>([])
+  const [isBatchDeriving, setIsBatchDeriving] = useState(false)
+
   // Track previous path index for path switch notification
   const prevPathIndexRef = useRef<number | undefined>(undefined)
 
@@ -726,10 +738,38 @@ export default function Home() {
     }
   }, [jobStatus?.currentPathIndex, jobStatus?.autoRetry, jobStatus?.blockchain, isRunning])
 
+  // ── Recovery event log ──
+  useEffect(() => {
+    if (jobStatus && isRunning) {
+      const now = Date.now()
+      setRecoveryLog(prev => {
+        const last = prev[prev.length - 1]
+        // Deduplicate rapid same-message logs
+        const msg = `Checked ${formatNumber(jobStatus.progress)}/${formatNumber(jobStatus.total)} combos · ${formatNumber(jobStatus.speed)}/s`
+        if (last && last.msg === msg && now - last.time < 2000) return prev
+        return [...prev, { time: now, msg }]
+      })
+    }
+    if (isCompleted && jobStatus) {
+      if (jobStatus.result && jobStatus.result.length > 0) {
+        setRecoveryLog(prev => [...prev, { time: Date.now(), msg: 'Match found! Recovery successful.' }])
+      } else {
+        setRecoveryLog(prev => [...prev, { time: Date.now(), msg: 'Search complete. No match found.' }])
+      }
+    }
+  }, [jobStatus?.progress, isCompleted])
+
+  // ── Auto-scroll recovery log ──
+  useEffect(() => {
+    if (recoveryLog.length > 0) {
+      recoveryLogRef.current?.scrollTo({ top: recoveryLogRef.current.scrollHeight, behavior: 'smooth' })
+    }
+  }, [recoveryLog.length])
+
   // ── Keyboard shortcuts ──
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      // Ctrl+1/2/3 to switch tabs
+      // Ctrl+1/2/3/4 to switch tabs
       if (e.ctrlKey && e.key === '1') {
         e.preventDefault()
         setActiveTab('recover')
@@ -739,6 +779,9 @@ export default function Home() {
       } else if (e.ctrlKey && e.key === '3') {
         e.preventDefault()
         setActiveTab('history')
+      } else if (e.ctrlKey && e.key === '4') {
+        e.preventDefault()
+        setActiveTab('wordlist')
       }
       // Ctrl+Enter to start recovery (when on Recovery tab)
       if (e.ctrlKey && e.key === 'Enter' && activeTab === 'recover') {
@@ -756,6 +799,38 @@ export default function Home() {
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [activeTab, isRunning, isCompleted, isFailed, isStopped])
+
+  // ── Batch derive handler ──
+  const handleBatchDerive = async () => {
+    if (!verifyMnemonic.trim()) {
+      toast.error('Seed phrase is required')
+      return
+    }
+    setIsBatchDeriving(true)
+    setBatchDeriveResults([])
+    const paths = BLOCKCHAIN_CONFIG[verifyBlockchain].paths
+    const results: { path: string; label: string; address: string }[] = []
+    for (const p of paths) {
+      try {
+        const res = await fetch('/api/derive', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mnemonic: verifyMnemonic.trim(), blockchain: verifyBlockchain, derivationPath: p.path }),
+        })
+        const data = await res.json()
+        if (res.ok && data.address) {
+          results.push({ path: p.path, label: p.label, address: data.address })
+        }
+      } catch {
+        // skip failed derivations
+      }
+    }
+    setBatchDeriveResults(results)
+    setIsBatchDeriving(false)
+    if (results.length > 0) {
+      toast.success(`Derived ${results.length} addresses across all paths`)
+    }
+  }
 
   // Check if all words are valid BIP39 words
   const allWordsValid = useMemo(() => {
@@ -974,6 +1049,7 @@ export default function Home() {
     setCopied(false)
     setShowEstimateWarning(false)
     setShowConfetti(false)
+    setRecoveryLog([])
   }
 
   const handleClearPersistedHistory = () => {
@@ -1191,60 +1267,12 @@ export default function Home() {
   // ─── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen flex flex-col bg-zinc-950 text-zinc-100">
-      {/* ── Background Grid + Floating Dots + Gradient Orbs ── */}
-      <div className="fixed inset-0 z-0 pointer-events-none overflow-hidden">
-        {/* Grid pattern */}
-        <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.02)_1px,transparent_1px)] bg-[size:64px_64px]" />
-        {/* Large gradient orbs */}
-        <div className="absolute top-0 left-1/4 w-[500px] h-[500px] bg-emerald-500/[0.04] rounded-full blur-[160px]" />
-        <div className="absolute bottom-0 right-1/4 w-[500px] h-[500px] bg-cyan-500/[0.04] rounded-full blur-[160px]" />
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-teal-500/[0.02] rounded-full blur-[200px]" />
-        {/* Floating dots - emerald */}
-        {Array.from({ length: 20 }).map((_, i) => (
-          <div
-            key={`em-${i}`}
-            className="floating-dot bg-emerald-400/20"
-            style={{
-              left: `${5 + (i * 4.7) % 90}%`,
-              top: `${10 + (i * 7.3) % 80}%`,
-              animation: `float-dot-${(i % 3) + 1} ${15 + (i * 3) % 20}s ease-in-out infinite`,
-              animationDelay: `${(i * 1.7) % 10}s`,
-            }}
-          />
-        ))}
-        {/* Floating dots - cyan */}
-        {Array.from({ length: 15 }).map((_, i) => (
-          <div
-            key={`cy-${i}`}
-            className="floating-dot bg-cyan-400/15"
-            style={{
-              left: `${8 + (i * 5.9) % 85}%`,
-              top: `${15 + (i * 6.1) % 75}%`,
-              animation: `float-dot-${(i % 3) + 1} ${18 + (i * 2.3) % 22}s ease-in-out infinite`,
-              animationDelay: `${(i * 2.1) % 12}s`,
-            }}
-          />
-        ))}
-        {/* Floating dots - teal (new) */}
-        {Array.from({ length: 8 }).map((_, i) => (
-          <div
-            key={`tl-${i}`}
-            className="floating-dot bg-teal-400/10"
-            style={{
-              left: `${12 + (i * 8.3) % 80}%`,
-              top: `${20 + (i * 5.7) % 70}%`,
-              animation: `float-dot-${(i % 3) + 1} ${20 + (i * 4) % 25}s ease-in-out infinite`,
-              animationDelay: `${(i * 3.2) % 15}s`,
-              width: '4px',
-              height: '4px',
-            }}
-          />
-        ))}
-      </div>
+    <div className="min-h-screen flex flex-col bg-background text-foreground">
+      {/* ── Background (Pure CSS, no DOM-heavy elements) ── */}
+      <div className="fixed inset-0 z-0 pointer-events-none overflow-hidden crypto-bg" />
 
       {/* ── Header ── */}
-      <header className="border-b border-zinc-800/60 bg-zinc-950/80 backdrop-blur-xl sticky top-0 z-40">
+      <header className="border-b border-border/60 bg-background/80 backdrop-blur-xl sticky top-0 z-40">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3 flex items-center gap-3">
           <div className="flex items-center justify-center h-9 w-9 rounded-lg bg-gradient-to-br from-emerald-500/20 to-cyan-500/20 border border-emerald-500/30 shadow-lg shadow-emerald-500/5">
             <Shield className="h-4.5 w-4.5 text-emerald-400" />
@@ -1465,11 +1493,12 @@ export default function Home() {
         <Separator className="bg-zinc-800/40" />
 
         {/* ── Tab Navigation ── */}
-        <div className="flex gap-1 bg-zinc-900/40 p-1 rounded-xl border border-zinc-800/50">
+        <div className="flex gap-1 bg-muted/40 p-1 rounded-xl border border-border/50">
           {([
             { id: 'recover' as AppTab, label: 'Recovery', icon: <Search className="h-3.5 w-3.5" /> },
             { id: 'verify' as AppTab, label: 'Quick Verify', icon: <CheckCircle2 className="h-3.5 w-3.5" /> },
             { id: 'history' as AppTab, label: 'History', icon: <History className="h-3.5 w-3.5" /> },
+            { id: 'wordlist' as AppTab, label: 'Word List', icon: <BookOpen className="h-3.5 w-3.5" /> },
           ] as const).map((tab) => (
             <button
               key={tab.id}
@@ -2389,6 +2418,44 @@ export default function Home() {
                   </CardHeader>
                 </Card>
               )}
+
+              {/* ── Recovery Event Log ── */}
+              {(isRunning || (isCompleted && recoveryLog.length > 0) || (isStopped && recoveryLog.length > 0)) && (
+                <Card className="bg-zinc-900/40 border-zinc-800/50">
+                  <CardHeader className="pb-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Activity className="h-4 w-4 text-cyan-400" />
+                        <CardTitle className="text-sm font-semibold">Recovery Log</CardTitle>
+                        <Badge variant="outline" className="text-[8px] border-zinc-700 text-zinc-500 h-4 px-1.5">
+                          {recoveryLog.length} events
+                        </Badge>
+                      </div>
+                      {recoveryLog.length > 0 && !isRunning && (
+                        <Button variant="ghost" size="sm" className="h-6 text-[10px] text-zinc-500 hover:text-zinc-300" onClick={() => setRecoveryLog([])}>
+                          Clear
+                        </Button>
+                      )}
+                    </div>
+                  </CardHeader>
+                  <CardContent className="pt-0">
+                    <div ref={recoveryLogRef} className="max-h-40 overflow-y-auto space-y-0.5 font-mono text-[11px] rounded-lg bg-zinc-950/50 border border-zinc-800/40 p-2">
+                      {recoveryLog.map((entry, i) => (
+                        <div key={i} className="flex gap-2">
+                          <span className="text-zinc-600 shrink-0">{new Date(entry.time).toLocaleTimeString()}</span>
+                          <span className={entry.msg.includes('Match found') ? 'text-emerald-400' : entry.msg.includes('No match') ? 'text-amber-400' : 'text-zinc-400'}>{entry.msg}</span>
+                        </div>
+                      ))}
+                      {isRunning && (
+                        <div className="flex gap-2 text-zinc-600">
+                          <span>{new Date().toLocaleTimeString()}</span>
+                          <span>Searching{'.'.repeat(searchingDots + 1)}</span>
+                        </div>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
             </motion.div>
           )}
 
@@ -2541,6 +2608,60 @@ export default function Home() {
                       )}
                     </AnimatePresence>
                   </div>
+
+                  {/* Batch Derive All Paths */}
+                  {BLOCKCHAIN_CONFIG[verifyBlockchain as Blockchain]?.paths.length > 1 && (
+                    <div className="border-t border-zinc-800/50 pt-4">
+                      <div className="flex items-center gap-2 mb-3">
+                        <Route className="h-4 w-4 text-teal-400" />
+                        <span className="text-xs font-medium text-zinc-400">Derive All Paths</span>
+                        <Badge variant="outline" className="text-[8px] border-teal-500/30 text-teal-400 h-4 px-1.5">
+                          {BLOCKCHAIN_CONFIG[verifyBlockchain as Blockchain]?.paths.length} paths
+                        </Badge>
+                        <TooltipProvider delayDuration={300}>
+                          <Tooltip>
+                            <TooltipTrigger>
+                              <Info className="h-3 w-3 text-zinc-600" />
+                            </TooltipTrigger>
+                            <TooltipContent side="top" className="max-w-xs text-xs">
+                              Derive addresses for ALL derivation paths of the selected blockchain at once. Helps you find which path your wallet uses.
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      </div>
+                      <Button
+                        onClick={handleBatchDerive}
+                        disabled={isBatchDeriving || !verifyMnemonic.trim()}
+                        variant="outline"
+                        className="w-full h-10 border-teal-500/30 bg-teal-500/5 text-teal-400 hover:bg-teal-500/10 hover:text-teal-300 font-semibold text-sm rounded-xl disabled:opacity-50"
+                      >
+                        {isBatchDeriving ? (
+                          <>
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            Deriving all paths...
+                          </>
+                        ) : (
+                          <>
+                            <Route className="h-4 w-4" />
+                            Derive All Paths
+                          </>
+                        )}
+                      </Button>
+                      {batchDeriveResults.length > 0 && (
+                        <div className="mt-3 space-y-1.5">
+                          {batchDeriveResults.map((r, i) => (
+                            <div key={i} className="bg-teal-950/15 border border-teal-500/20 rounded-lg p-2.5">
+                              <div className="flex items-center gap-2 mb-1">
+                                <Badge variant="outline" className="text-[8px] border-teal-500/30 text-teal-400 h-4 px-1.5">{r.label}</Badge>
+                                <span className="text-[9px] font-mono text-zinc-500">{r.path}</span>
+                              </div>
+                              <p className="text-[11px] font-mono text-teal-300 break-all bg-zinc-900/60 rounded p-1.5 select-all">{r.address}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Verify Result */}
                   <AnimatePresence>
@@ -2873,6 +2994,79 @@ export default function Home() {
               </Card>
             </motion.div>
           )}
+
+          {/* ── Word List Tab ── */}
+          {activeTab === 'wordlist' && (
+            <motion.div
+              key="wordlist"
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 20 }}
+              transition={{ duration: 0.2 }}
+              className="space-y-4"
+            >
+              <Card className="bg-zinc-900/40 border-zinc-800/50">
+                <CardHeader className="pb-3">
+                  <div className="flex items-center gap-2">
+                    <BookOpen className="h-4 w-4 text-emerald-400" />
+                    <CardTitle className="text-base font-semibold">BIP39 Word Dictionary</CardTitle>
+                    <Badge variant="outline" className="text-[9px] border-cyan-500/30 text-cyan-400 bg-cyan-500/10 h-5">
+                      {wordlist.length} words
+                    </Badge>
+                  </div>
+                  <CardDescription className="text-xs text-zinc-500">
+                    Search and browse the complete BIP39 wordlist. Click any word to copy it. Useful for finding the correct spelling of seed phrase words.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="pt-0">
+                  <div className="relative mb-3">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
+                    <Input
+                      value={wordlistSearch}
+                      onChange={(e) => setWordlistSearch(e.target.value)}
+                      placeholder="Search BIP39 words..."
+                      className="h-10 pl-10 bg-zinc-900/80 border-zinc-800 text-zinc-100 placeholder:text-zinc-600 font-mono text-sm focus:border-emerald-500/50 focus:ring-emerald-500/20"
+                    />
+                    {wordlistSearch && (
+                      <button
+                        onClick={() => setWordlistSearch('')}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300"
+                      >
+                        <XIcon className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                  {wordlistSearch && (
+                    <p className="text-[10px] text-zinc-500 mb-2">
+                      {wordlist.filter(w => w.startsWith(wordlistSearch.toLowerCase())).length} words match &quot;{wordlistSearch.toLowerCase()}&quot;
+                    </p>
+                  )}
+                  <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-1 max-h-80 overflow-y-auto rounded-lg bg-zinc-950/50 border border-zinc-800/40 p-2">
+                    {wordlist
+                      .filter(w => !wordlistSearch || w.startsWith(wordlistSearch.toLowerCase()))
+                      .map((word, i) => (
+                        <button
+                          key={word}
+                          onClick={() => {
+                            navigator.clipboard.writeText(word)
+                            setWordlistCopiedIdx(i)
+                            setTimeout(() => setWordlistCopiedIdx(null), 1500)
+                          }}
+                          className={`px-2 py-1 text-[11px] font-mono rounded-md transition-all duration-150 text-left truncate ${
+                            wordlistCopiedIdx === i
+                              ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                              : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 border border-transparent'
+                          }`}
+                        >
+                          {wordlistCopiedIdx === i ? <Check className="h-3 w-3 inline mr-1" /> : null}
+                          {word}
+                        </button>
+                      ))}
+                  </div>
+                </CardContent>
+              </Card>
+            </motion.div>
+          )}
         </AnimatePresence>
 
         {/* ── Keyboard Shortcuts Dialog ── */}
@@ -3078,7 +3272,7 @@ export default function Home() {
       </main>
 
       {/* ── Footer ── */}
-      <footer className="mt-auto border-t border-zinc-800/40 bg-zinc-950/80 backdrop-blur-sm">
+      <footer className="mt-auto border-t border-border/40 bg-background/80 backdrop-blur-sm">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 py-5 space-y-4">
           {/* Top row: Logo, security badges, links */}
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
