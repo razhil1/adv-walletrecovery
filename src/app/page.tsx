@@ -602,6 +602,17 @@ export default function Home() {
   const [importMnemonic, setImportMnemonic] = useState('')
   const [importError, setImportError] = useState('')
 
+  // High-speed scan state
+  const [scanJobId, setScanJobId] = useState<string | null>(null)
+  const [scanStatus, setScanStatus] = useState<{
+    status: string; scanned: number; speed: number; found: { mnemonic: string; addresses: { blockchain: Blockchain; address: string; balance: string; symbol: string }[]; foundAt: number }[];
+    foundCount: number; elapsed: number; wordCount: number; chains: Blockchain[]; checkBalance: boolean; error?: string;
+  } | null>(null)
+  const [scanMode, setScanMode] = useState<'fast' | 'balanced' | 'full'>('balanced')
+  const [scanChains, setScanChains] = useState<Blockchain[]>(['eth', 'btc', 'sol', 'xrp'])
+  const [scanBalancePercent, setScanBalancePercent] = useState(10)
+  const scanPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
   // ── Count-up animation for stats ──
   const [countUpDone, setCountUpDone] = useState(false)
   const [countUpValues, setCountUpValues] = useState({ blockchains: 0, words: 0, paths: 0 })
@@ -1645,6 +1656,78 @@ export default function Home() {
       setAutoScanElapsed(0)
     }
   }, [autoScanActive, autoScanStartTime])
+
+  // ── High-speed scan polling ──
+  useEffect(() => {
+    if (scanJobId && scanStatus?.status === 'running') {
+      scanPollRef.current = setInterval(async () => {
+        try {
+          const res = await fetch(`/api/wallet/scan?jobId=${scanJobId}`)
+          const data = await res.json()
+          if (res.ok) {
+            setScanStatus(data)
+            if (data.status !== 'running') {
+              if (scanPollRef.current) clearInterval(scanPollRef.current)
+            }
+          }
+        } catch {
+          // ignore poll errors
+        }
+      }, 500)
+    }
+    return () => {
+      if (scanPollRef.current) clearInterval(scanPollRef.current)
+    }
+  }, [scanJobId, scanStatus?.status])
+
+  // ── High-speed scan handlers ──
+  const handleStartScan = async () => {
+    try {
+      const res = await fetch('/api/wallet/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          wordCount: walletWordCount,
+          chains: scanChains,
+          mode: scanMode,
+          batchSize: scanMode === 'fast' ? 200 : scanMode === 'balanced' ? 100 : 50,
+          balanceCheckPercent: scanBalancePercent,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to start scan')
+        return
+      }
+      setScanJobId(data.jobId)
+      setScanStatus(null)
+      toast.success('High-speed scan started!', {
+        description: `Mode: ${scanMode} | Chains: ${scanChains.map(c => c.toUpperCase()).join(', ')}`,
+      })
+    } catch {
+      toast.error('Network error')
+    }
+  }
+
+  const handleStopScan = async () => {
+    if (!scanJobId) return
+    try {
+      await fetch(`/api/wallet/scan?jobId=${scanJobId}`, { method: 'PATCH' })
+      if (scanPollRef.current) clearInterval(scanPollRef.current)
+      // Final poll
+      const res = await fetch(`/api/wallet/scan?jobId=${scanJobId}`)
+      if (res.ok) setScanStatus(await res.json())
+      toast.info('Scan stopped')
+    } catch {
+      toast.error('Failed to stop scan')
+    }
+  }
+
+  const isScanRunning = scanStatus?.status === 'running'
+  const scanSpeed = scanStatus?.speed ?? 0
+  const scanScanned = scanStatus?.scanned ?? 0
+  const scanFound = scanStatus?.found ?? []
+  const scanElapsed = scanStatus?.elapsed ?? 0
 
   // ─── Render ────────────────────────────────────────────────────────────────
 
@@ -3813,85 +3896,279 @@ export default function Home() {
                     </>
                   )}
 
-                  {/* Auto-scan controls */}
-                  <div className="border border-zinc-800/60 rounded-xl p-4 space-y-3 bg-zinc-900/30">
+                  {/* ── High-Speed Turbo Scan ── */}
+                  <div className="border border-amber-500/20 rounded-xl p-4 space-y-4 bg-gradient-to-b from-zinc-900/40 to-zinc-900/20">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <Gauge className="h-4 w-4 text-amber-400" />
-                        <span className="text-sm font-medium text-zinc-300">Auto-Scan Mode</span>
-                        <TooltipProvider delayDuration={300}>
-                          <Tooltip>
-                            <TooltipTrigger>
-                              <Info className="h-3 w-3 text-zinc-600" />
-                            </TooltipTrigger>
-                            <TooltipContent side="top" className="text-xs max-w-xs">
-                              Continuously generates random wallets and checks their balances. Extremely unlikely to find funded wallets - this is primarily for educational/demonstration purposes.
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
+                        <div className="flex items-center justify-center h-7 w-7 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                          <Gauge className="h-4 w-4 text-amber-400" />
+                        </div>
+                        <div>
+                          <span className="text-sm font-semibold text-zinc-200">Turbo Scan</span>
+                          <p className="text-[9px] text-zinc-500">High-speed server-side generation &middot; 100k+ wallets/min</p>
+                        </div>
                       </div>
                       <Button
-                        onClick={handleAutoScan}
-                        variant={autoScanActive ? 'destructive' : 'outline'}
+                        onClick={isScanRunning ? handleStopScan : handleStartScan}
+                        variant={isScanRunning ? 'destructive' : 'default'}
                         size="sm"
                         className={`text-xs h-8 gap-1.5 ${
-                          !autoScanActive ? 'border-amber-500/30 text-amber-400 hover:bg-amber-500/10' : ''
+                          !isScanRunning ? 'bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white border-0' : ''
                         }`}
                       >
-                        {autoScanActive ? (
-                          <><StopCircle className="h-3.5 w-3.5" /> Stop Scan</>
+                        {isScanRunning ? (
+                          <><StopCircle className="h-3.5 w-3.5" /> Stop</>
                         ) : (
-                          <><Zap className="h-3.5 w-3.5" /> Start Auto-Scan</>
+                          <><Zap className="h-3.5 w-3.5" /> Start Turbo Scan</>
                         )}
                       </Button>
                     </div>
 
-                    {autoScanActive && (
-                      <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="space-y-2">
-                        <div className="flex items-center gap-3 text-xs flex-wrap">
-                          <Badge variant="outline" className="border-cyan-500/30 text-cyan-400 bg-cyan-500/10 text-[9px] animate-pulse">
-                            <Activity className="h-2.5 w-2.5 mr-1" />
-                            Scanning...
-                          </Badge>
-                          <span className="text-zinc-500">Wallets checked: <span className="text-zinc-300 font-mono">{autoScanCount}</span></span>
-                          <span className="text-zinc-500">Found: <span className="text-emerald-400 font-mono">{autoScanFound.length}</span></span>
-                          {autoScanElapsed > 0 && (
-                            <span className="text-zinc-500 flex items-center gap-1">
-                              <Clock className="h-3 w-3" />
-                              {formatTime(autoScanElapsed)}
-                            </span>
-                          )}
-                          {autoScanElapsed > 2 && autoScanCount > 0 && (
-                            <span className="text-zinc-500">
-                              Speed: <span className="text-cyan-400 font-mono">{(autoScanCount / autoScanElapsed).toFixed(1)}</span>
-                              <span className="text-zinc-600"> wallets/s</span>
-                            </span>
-                          )}
+                    {/* Scan configuration */}
+                    {!isScanRunning && !scanStatus && (
+                      <div className="space-y-3">
+                        {/* Mode selector */}
+                        <div className="space-y-2">
+                          <Label className="text-xs text-zinc-400">Scan Mode</Label>
+                          <div className="grid grid-cols-3 gap-2">
+                            {[
+                              { mode: 'fast' as const, label: '⚡ Fast', desc: 'Gen only, no balance check', color: 'emerald' },
+                              { mode: 'balanced' as const, label: '⚖️ Balanced', desc: `Check ${scanBalancePercent}% balances`, color: 'cyan' },
+                              { mode: 'full' as const, label: '🔍 Full', desc: 'Check all balances', color: 'amber' },
+                            ].map(opt => (
+                              <button
+                                key={opt.mode}
+                                onClick={() => setScanMode(opt.mode)}
+                                className={`px-3 py-2.5 rounded-lg text-left transition-all border ${
+                                  scanMode === opt.mode
+                                    ? opt.color === 'emerald' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                                    : opt.color === 'cyan' ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-400'
+                                    : 'bg-amber-500/10 border-amber-500/30 text-amber-400'
+                                    : 'bg-zinc-900/40 border-zinc-800/40 text-zinc-500 hover:border-zinc-700'
+                                }`}
+                              >
+                                <p className="text-xs font-medium">{opt.label}</p>
+                                <p className="text-[9px] text-zinc-600 mt-0.5">{opt.desc}</p>
+                              </button>
+                            ))}
+                          </div>
                         </div>
-                        <Progress value={autoScanActive ? undefined : 0} className="h-1.5 bg-zinc-800" />
+
+                        {/* Chain selector */}
+                        <div className="space-y-2">
+                          <Label className="text-xs text-zinc-400">Chains to Scan</Label>
+                          <div className="flex flex-wrap gap-2">
+                            {(['eth', 'btc', 'sol', 'xrp'] as Blockchain[]).map(chain => {
+                              const cfg = BLOCKCHAIN_CONFIG[chain]
+                              const isSelected = scanChains.includes(chain)
+                              return (
+                                <button
+                                  key={chain}
+                                  onClick={() => {
+                                    setScanChains(prev =>
+                                      isSelected
+                                        ? prev.filter(c => c !== chain)
+                                        : [...prev, chain]
+                                    )
+                                  }}
+                                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border ${
+                                    isSelected
+                                      ? `${cfg.accentBg} ${cfg.accent} border-current/30`
+                                      : 'bg-zinc-900/40 border-zinc-800/40 text-zinc-600 hover:text-zinc-400'
+                                  }`}
+                                >
+                                  <span className="text-sm">{cfg.icon}</span>
+                                  {cfg.name}
+                                </button>
+                              )
+                            })}
+                          </div>
+                        </div>
+
+                        {/* Balance check percentage (balanced mode) */}
+                        {scanMode === 'balanced' && (
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <Label className="text-xs text-zinc-400">Balance Check Rate</Label>
+                              <span className="text-xs font-mono text-cyan-400">{scanBalancePercent}%</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="1"
+                              max="100"
+                              value={scanBalancePercent}
+                              onChange={(e) => setScanBalancePercent(Number(e.target.value))}
+                              className="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                            />
+                            <div className="flex justify-between text-[9px] text-zinc-600">
+                              <span>Faster (1%)</span>
+                              <span>Thorough (100%)</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Live scan stats */}
+                    {(isScanRunning || (scanStatus && scanStatus.status !== 'running')) && (
+                      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-3">
+                        {/* Stats grid */}
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                          <div className="bg-zinc-900/60 border border-zinc-800/50 rounded-lg p-2.5 text-center">
+                            <p className="text-[9px] text-zinc-500 uppercase tracking-wider">Scanned</p>
+                            <p className="text-lg font-bold font-mono text-zinc-100">{formatNumber(scanScanned)}</p>
+                          </div>
+                          <div className="bg-zinc-900/60 border border-zinc-800/50 rounded-lg p-2.5 text-center">
+                            <p className="text-[9px] text-zinc-500 uppercase tracking-wider">Speed</p>
+                            <p className="text-lg font-bold font-mono text-cyan-400">{formatNumber(scanSpeed)}</p>
+                            <p className="text-[8px] text-zinc-600">wallets/s</p>
+                          </div>
+                          <div className="bg-zinc-900/60 border border-zinc-800/50 rounded-lg p-2.5 text-center">
+                            <p className="text-[9px] text-zinc-500 uppercase tracking-wider">Elapsed</p>
+                            <p className="text-lg font-bold font-mono text-amber-400">{formatTime(scanElapsed)}</p>
+                          </div>
+                          <div className="bg-zinc-900/60 border border-zinc-800/50 rounded-lg p-2.5 text-center">
+                            <p className="text-[9px] text-zinc-500 uppercase tracking-wider">Found</p>
+                            <p className={`text-lg font-bold font-mono ${scanFound.length > 0 ? 'text-emerald-400' : 'text-zinc-500'}`}>{scanFound.length}</p>
+                          </div>
+                        </div>
+
+                        {/* Speed projection */}
+                        {isScanRunning && scanSpeed > 0 && (
+                          <div className="flex items-center gap-2 bg-cyan-500/5 border border-cyan-500/20 rounded-lg px-3 py-2">
+                            <Activity className="h-3.5 w-3.5 text-cyan-400 animate-pulse" />
+                            <span className="text-[10px] text-cyan-300">
+                              Projected: <span className="font-mono font-bold">{formatNumber(scanSpeed * 60)}</span> wallets/min
+                            </span>
+                            {scanMode === 'fast' && (
+                              <Badge variant="outline" className="text-[8px] h-4 border-emerald-500/30 text-emerald-400 bg-emerald-500/10 ml-auto">
+                                No balance check
+                              </Badge>
+                            )}
+                            {scanMode === 'balanced' && (
+                              <Badge variant="outline" className="text-[8px] h-4 border-cyan-500/30 text-cyan-400 bg-cyan-500/10 ml-auto">
+                                {scanBalancePercent}% balance check
+                              </Badge>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Progress bar (indeterminate) */}
+                        {isScanRunning && (
+                          <div className="h-1 bg-zinc-800 rounded-full overflow-hidden">
+                            <div className="h-full bg-gradient-to-r from-amber-500 via-cyan-500 to-emerald-500 rounded-full animate-scan-progress" />
+                          </div>
+                        )}
+
+                        {/* Stopped status */}
+                        {scanStatus && scanStatus.status === 'stopped' && (
+                          <div className="flex items-center gap-2 bg-zinc-800/40 border border-zinc-700/50 rounded-lg px-3 py-2">
+                            <StopCircle className="h-3.5 w-3.5 text-zinc-400" />
+                            <span className="text-[10px] text-zinc-400">
+                              Scan stopped. Checked <span className="font-mono text-zinc-300">{formatNumber(scanScanned)}</span> wallets
+                              {scanSpeed > 0 && <> at avg <span className="font-mono text-cyan-400">{formatNumber(scanSpeed)}</span>/s</>}.
+                            </span>
+                          </div>
+                        )}
                       </motion.div>
                     )}
 
                     {/* Found wallets */}
-                    {autoScanFound.length > 0 && (
-                      <div className="space-y-2 rounded-lg p-3 shadow-[0_0_15px_rgba(16,185,129,0.15)] border border-emerald-500/30 bg-emerald-500/5">
-                        <h4 className="text-xs font-medium text-emerald-400 flex items-center gap-1.5">
-                          <CheckCircle2 className="h-3 w-3" />
-                          Funded Wallets Found!
+                    {scanFound.length > 0 && (
+                      <div className="space-y-2 rounded-lg p-3 shadow-[0_0_20px_rgba(16,185,129,0.2)] border border-emerald-500/30 bg-emerald-500/5">
+                        <h4 className="text-xs font-semibold text-emerald-400 flex items-center gap-1.5">
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          Funded Wallets Found! ({scanFound.length})
                         </h4>
-                        <div className="space-y-1.5 max-h-40 overflow-y-auto">
-                          {autoScanFound.map((found, i) => (
-                            <div key={i} className="flex items-center gap-2 bg-emerald-500/5 border border-emerald-500/20 rounded-lg px-3 py-2 text-xs">
-                              <Badge variant="outline" className="text-[9px] h-5 border-emerald-500/30 text-emerald-400">
-                                {found.blockchain.toUpperCase()}
-                              </Badge>
-                              <span className="text-emerald-300 font-mono truncate flex-1">{found.address}</span>
-                              <span className="text-emerald-400 font-mono">{found.balance} {BLOCKCHAIN_CONFIG[found.blockchain]?.symbol}</span>
+                        <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
+                          {scanFound.map((found, i) => (
+                            <div key={i} className="bg-emerald-500/5 border border-emerald-500/20 rounded-lg px-3 py-2.5 space-y-2">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                {found.addresses.map((addr, j) => (
+                                  <Badge key={j} variant="outline" className="text-[9px] h-5 border-emerald-500/30 text-emerald-400 bg-emerald-500/10">
+                                    {addr.blockchain.toUpperCase()}: {addr.balance} {addr.symbol}
+                                  </Badge>
+                                ))}
+                              </div>
+                              <p className="text-[9px] font-mono text-emerald-300/70 break-all leading-relaxed">{found.mnemonic}</p>
+                              <div className="flex items-center gap-2">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => { navigator.clipboard.writeText(found.mnemonic); toast.success('Mnemonic copied') }}
+                                  className="h-5 text-[9px] text-emerald-400 hover:text-emerald-300 px-2"
+                                >
+                                  <Copy className="h-2.5 w-2.5 mr-1" /> Copy Mnemonic
+                                </Button>
+                              </div>
                             </div>
                           ))}
                         </div>
                       </div>
                     )}
+
+                    {/* Legacy auto-scan (kept for reference) */}
+                    <details className="group">
+                      <summary className="text-[10px] text-zinc-600 cursor-pointer hover:text-zinc-400 transition-colors flex items-center gap-1">
+                        <ChevronDown className="h-3 w-3 transition-transform group-open:rotate-180" />
+                        Legacy Auto-Scan (slow, client-side)
+                      </summary>
+                      <div className="mt-3 space-y-3 pt-3 border-t border-zinc-800/40">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-zinc-500">Client-side scan</span>
+                            <TooltipProvider delayDuration={300}>
+                              <Tooltip>
+                                <TooltipTrigger>
+                                  <Info className="h-3 w-3 text-zinc-600" />
+                                </TooltipTrigger>
+                                <TooltipContent side="top" className="text-xs max-w-xs">
+                                  Old method: generates wallets one-by-one with per-wallet HTTP requests. Very slow (~1 wallet/min). Use Turbo Scan above instead.
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          </div>
+                          <Button
+                            onClick={handleAutoScan}
+                            variant={autoScanActive ? 'destructive' : 'outline'}
+                            size="sm"
+                            className={`text-xs h-7 gap-1.5 ${
+                              !autoScanActive ? 'border-zinc-700 text-zinc-400 hover:bg-zinc-800' : ''
+                            }`}
+                          >
+                            {autoScanActive ? (
+                              <><StopCircle className="h-3 w-3" /> Stop</>
+                            ) : (
+                              <><Zap className="h-3 w-3" /> Start</>
+                            )}
+                          </Button>
+                        </div>
+                        {autoScanActive && (
+                          <div className="flex items-center gap-3 text-[10px] text-zinc-500 flex-wrap">
+                            <Badge variant="outline" className="border-cyan-500/30 text-cyan-400 bg-cyan-500/10 text-[8px] animate-pulse">
+                              <Activity className="h-2 w-2 mr-1" />
+                              Scanning
+                            </Badge>
+                            <span>Checked: <span className="text-zinc-300 font-mono">{autoScanCount}</span></span>
+                            <span>Found: <span className="text-emerald-400 font-mono">{autoScanFound.length}</span></span>
+                            {autoScanElapsed > 0 && <span>{formatTime(autoScanElapsed)}</span>}
+                          </div>
+                        )}
+                        {autoScanFound.length > 0 && (
+                          <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                            {autoScanFound.map((found, i) => (
+                              <div key={i} className="flex items-center gap-2 bg-emerald-500/5 border border-emerald-500/20 rounded-md px-2 py-1.5 text-[10px]">
+                                <Badge variant="outline" className="text-[8px] h-4 border-emerald-500/30 text-emerald-400">
+                                  {found.blockchain.toUpperCase()}
+                                </Badge>
+                                <span className="text-emerald-300 font-mono truncate flex-1">{found.address}</span>
+                                <span className="text-emerald-400 font-mono">{found.balance}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </details>
                   </div>
 
                   {/* Generated Seed Phrase */}

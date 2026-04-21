@@ -618,3 +618,35 @@ html:not(.dark) .recharts-default-tooltip {
   border: 1px solid #e4e4e7 !important;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08) !important;
 }
+
+/* ─── Turbo Scan Progress Bar Animation ─── */
+@keyframes scan-progress {
+  0% {
+    width: 0%;
+    margin-left: 0%;
+  }
+  50% {
+    width: 60%;
+    margin-left: 20%;
+  }
+  100% {
+    width: 0%;
+    margin-left: 100%;
+  }
+}
+
+.animate-scan-progress {
+  animation: scan-progress 2s ease-in-out infinite;
+}
+
+/* ─── Custom Scrollbar for Found Wallets ─── */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(16, 185, 129, 0.3);
+  border-radius: 2px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(16, 185, 129, 0.5);
+}
