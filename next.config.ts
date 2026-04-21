@@ -10,6 +10,13 @@ const nextConfig: NextConfig = {
   allowedDevOrigins: [
     ".space.z.ai",
   ],
+  serverExternalPackages: [
+    "bip39",
+    "ethers",
+    "tweetnacl",
+    "ed25519-hd-key",
+    "bitcoinjs-lib",
+  ],
 };
 
 export default nextConfig;

@@ -3,17 +3,14 @@ import * as bip39 from 'bip39';
 import { HDNodeWallet } from 'ethers';
 import { derivePath as ed25519DerivePath } from 'ed25519-hd-key';
 import nacl from 'tweetnacl';
-import bs58Module from 'bs58';
 import { createHash } from 'crypto';
 import { type Blockchain, DERIVATION_PATHS, getDefaultPath } from '@/lib/crypto-recovery';
 
-const bs58 = bs58Module.default || bs58Module;
-
 export const runtime = 'nodejs';
 
+// Pure JS Base58 encode (avoids bs58 ESM import issues with Turbopack)
 const BTC_BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 const XRP_BASE58_ALPHABET = 'rpshnaf39wBUDNEGHJKLM4PQRST7VWXYZ2bcdeCg65jkm8oFqi1tuvAxy';
-
 function base58Encode(buffer: Buffer, alphabet: string = BTC_BASE58_ALPHABET): string {
   const bytes = buffer;
   let num = BigInt('0x' + bytes.toString('hex'));
@@ -101,7 +98,7 @@ export async function POST(request: NextRequest) {
             const versionedPayload = Buffer.concat([Buffer.from([versionByte]), h160]);
             const checksum = doubleSha256(versionedPayload).slice(0, 4);
             const addressBytes = Buffer.concat([versionedPayload, checksum]);
-            address = base58Encode(addressBytes, BTC_BASE58_ALPHABET);
+            address = base58Encode(addressBytes);
             privateKey = child.privateKey;
             break;
           }
@@ -109,9 +106,9 @@ export async function POST(request: NextRequest) {
             const seedHex = seed.toString('hex');
             const { key } = ed25519DerivePath(path.path, seedHex);
             const keypair = nacl.sign.keyPair.fromSeed(key);
-            address = bs58.encode(Buffer.from(keypair.publicKey));
+            address = base58Encode(Buffer.from(keypair.publicKey));
             // Solana private key is the full 64-byte keypair (private + public)
-            privateKey = bs58.encode(Buffer.from(keypair.secretKey));
+            privateKey = base58Encode(Buffer.from(keypair.secretKey));
             break;
           }
           case 'xrp': {

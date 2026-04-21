@@ -3,9 +3,7 @@ import { HDNodeWallet } from 'ethers';
 import { createHash } from 'crypto';
 import { derivePath as ed25519DerivePath } from 'ed25519-hd-key';
 import nacl from 'tweetnacl';
-import bs58Module from 'bs58';
-const bs58 = bs58Module.default || bs58Module;
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -171,7 +169,7 @@ async function deriveSOLAddress(mnemonic: string, path: string): Promise<string>
   const seedHex = seed.toString('hex');
   const { key } = ed25519DerivePath(path, seedHex);
   const keypair = nacl.sign.keyPair.fromSeed(key);
-  return bs58.encode(Buffer.from(keypair.publicKey));
+  return base58Encode(Buffer.from(keypair.publicKey));
 }
 
 async function deriveXRPAddress(mnemonic: string, path: string): Promise<string> {
@@ -320,7 +318,7 @@ export function createJob(
     : [knownAddress];
 
   const job: RecoveryJob = {
-    id: uuidv4(),
+    id: randomUUID(),
     partialMnemonic,
     knownAddress,
     knownAddresses: addresses,
