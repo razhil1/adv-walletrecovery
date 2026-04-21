@@ -597,6 +597,10 @@ export default function Home() {
   const [lastGeneratedAt, setLastGeneratedAt] = useState<number | null>(null)
   const [autoScanStartTime, setAutoScanStartTime] = useState<number | null>(null)
   const [autoScanElapsed, setAutoScanElapsed] = useState(0)
+  // Wallet import state
+  const [walletMode, setWalletMode] = useState<'generate' | 'import'>('generate')
+  const [importMnemonic, setImportMnemonic] = useState('')
+  const [importError, setImportError] = useState('')
 
   // ── Count-up animation for stats ──
   const [countUpDone, setCountUpDone] = useState(false)
@@ -1386,6 +1390,77 @@ export default function Home() {
         setDerivedAddresses(deriveData.addresses)
         toast.success(`Wallet generated! ${deriveData.addresses.length} addresses derived`)
       }
+    } catch {
+      toast.error('Network error')
+    } finally {
+      setIsGenerating(false)
+    }
+  }
+
+  const handleImportWallet = async () => {
+    const mnemonic = importMnemonic.trim().toLowerCase()
+    if (!mnemonic) {
+      toast.error('Please enter a seed phrase')
+      return
+    }
+    const words = mnemonic.split(/\s+/)
+    if (words.length !== 12 && words.length !== 24) {
+      toast.error('Seed phrase must be 12 or 24 words', {
+        description: `You entered ${words.length} words.`,
+      })
+      return
+    }
+    // Check all words are in BIP39 wordlist
+    if (wordlist.length > 0) {
+      const invalidWords = words.filter(w => !wordlist.includes(w))
+      if (invalidWords.length > 0) {
+        setImportError(`Invalid BIP39 words: ${invalidWords.slice(0, 3).join(', ')}${invalidWords.length > 3 ? '...' : ''}`)
+        toast.error('Some words are not in the BIP39 wordlist', {
+          description: `Found ${invalidWords.length} invalid word(s)`,
+        })
+        return
+      }
+    }
+    setImportError('')
+    setIsGenerating(true)
+    setDerivedAddresses([])
+    setWalletBalances({})
+    try {
+      const deriveRes = await fetch('/api/wallet/derive-full', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mnemonic }),
+      })
+      const deriveData = await deriveRes.json()
+      if (!deriveRes.ok) {
+        toast.error(deriveData.error || 'Invalid seed phrase')
+        setImportError(deriveData.error || 'Invalid seed phrase checksum')
+        return
+      }
+      setGeneratedMnemonic(mnemonic)
+      setDerivedAddresses(deriveData.addresses)
+      setWalletsGenerated(prev => prev + 1)
+      setLastGeneratedAt(Date.now())
+      toast.success(`Wallet imported! ${deriveData.addresses.length} addresses derived`)
+      // Auto-check balances
+      setIsCheckingBalances(true)
+      const newBalances: Record<string, { balance: string; symbol: string; error?: string }> = {}
+      for (const addr of deriveData.addresses) {
+        try {
+          const res = await fetch('/api/wallet/balance', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ address: addr.address, blockchain: addr.blockchain }),
+          })
+          const data = await res.json()
+          newBalances[addr.address] = { balance: data.balance, symbol: data.symbol, error: data.error }
+        } catch {
+          newBalances[addr.address] = { balance: '0', symbol: '', error: 'Network error' }
+        }
+      }
+      setWalletBalances(newBalances)
+      setIsCheckingBalances(false)
+      toast.success('Balance check complete')
     } catch {
       toast.error('Network error')
     } finally {
@@ -3566,73 +3641,177 @@ export default function Home() {
                     </Badge>
                   </div>
                   <CardDescription className="text-xs text-zinc-500">
-                    Generate a random BIP39 seed phrase and derive wallet addresses across multiple blockchains.
+                    {walletMode === 'generate'
+                      ? 'Generate a random BIP39 seed phrase and derive wallet addresses across multiple blockchains.'
+                      : 'Import an existing seed phrase to derive addresses and check balances across all chains.'}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  {/* Word count selector + strength indicator */}
+                  {/* Mode toggle */}
                   <div className="flex items-center gap-3 flex-wrap">
-                    <Label className="text-xs text-zinc-400">Word Count</Label>
-                    <div className="flex items-center gap-2 bg-zinc-800/60 rounded-lg p-1">
+                    <Label className="text-xs text-zinc-400">Mode</Label>
+                    <div className="flex items-center gap-1 bg-zinc-800/60 rounded-lg p-1">
                       <button
-                        onClick={() => setWalletWordCount(12)}
-                        className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
-                          walletWordCount === 12
+                        onClick={() => setWalletMode('generate')}
+                        className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all flex items-center gap-1.5 ${
+                          walletMode === 'generate'
                             ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
                             : 'text-zinc-500 hover:text-zinc-300'
                         }`}
                       >
-                        12 Words
+                        <Sparkles className="h-3 w-3" />
+                        Generate
                       </button>
                       <button
-                        onClick={() => setWalletWordCount(24)}
-                        className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
-                          walletWordCount === 24
-                            ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                        onClick={() => setWalletMode('import')}
+                        className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all flex items-center gap-1.5 ${
+                          walletMode === 'import'
+                            ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
                             : 'text-zinc-500 hover:text-zinc-300'
                         }`}
                       >
-                        24 Words
+                        <ClipboardPaste className="h-3 w-3" />
+                        Import
                       </button>
-                    </div>
-                    {/* Strength indicator */}
-                    <div className="flex items-center gap-2">
-                      <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-zinc-800/60 border border-zinc-700/50">
-                        <Hash className="h-3 w-3 text-zinc-500" />
-                        <span className="text-[10px] text-zinc-400 font-mono">{walletWordCount === 12 ? '128' : '256'}-bit</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <div className="w-16 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
-                          <motion.div
-                            initial={{ width: 0 }}
-                            animate={{ width: walletWordCount === 12 ? '60%' : '100%' }}
-                            transition={{ duration: 0.5, ease: 'easeOut' }}
-                            className={`h-full rounded-full ${walletWordCount === 12 ? 'bg-amber-500' : 'bg-emerald-500'}`}
-                          />
-                        </div>
-                        <Badge variant="outline" className={`text-[9px] h-5 ${
-                          walletWordCount === 12
-                            ? 'border-amber-500/30 text-amber-400 bg-amber-500/10'
-                            : 'border-emerald-500/30 text-emerald-400 bg-emerald-500/10'
-                        }`}>
-                          {walletWordCount === 12 ? 'Strong' : 'Very Strong'}
-                        </Badge>
-                      </div>
-                    </div>
-                    <div className="ml-auto flex items-center gap-2">
-                      <Button
-                        onClick={handleGenerateWallet}
-                        disabled={isGenerating || autoScanActive}
-                        className="bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white text-xs h-9 gap-1.5"
-                      >
-                        {isGenerating ? (
-                          <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Generating...</>
-                        ) : (
-                          <><Sparkles className="h-3.5 w-3.5" /> Generate Wallet</>
-                        )}
-                      </Button>
                     </div>
                   </div>
+
+                  {walletMode === 'generate' ? (
+                    <>
+                      {/* Word count selector + strength indicator */}
+                      <div className="flex items-center gap-3 flex-wrap">
+                        <Label className="text-xs text-zinc-400">Word Count</Label>
+                        <div className="flex items-center gap-2 bg-zinc-800/60 rounded-lg p-1">
+                          <button
+                            onClick={() => setWalletWordCount(12)}
+                            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                              walletWordCount === 12
+                                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                : 'text-zinc-500 hover:text-zinc-300'
+                            }`}
+                          >
+                            12 Words
+                          </button>
+                          <button
+                            onClick={() => setWalletWordCount(24)}
+                            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                              walletWordCount === 24
+                                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                : 'text-zinc-500 hover:text-zinc-300'
+                            }`}
+                          >
+                            24 Words
+                          </button>
+                        </div>
+                        {/* Strength indicator */}
+                        <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-zinc-800/60 border border-zinc-700/50">
+                            <Hash className="h-3 w-3 text-zinc-500" />
+                            <span className="text-[10px] text-zinc-400 font-mono">{walletWordCount === 12 ? '128' : '256'}-bit</span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <div className="w-16 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+                              <motion.div
+                                initial={{ width: 0 }}
+                                animate={{ width: walletWordCount === 12 ? '60%' : '100%' }}
+                                transition={{ duration: 0.5, ease: 'easeOut' }}
+                                className={`h-full rounded-full ${walletWordCount === 12 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                              />
+                            </div>
+                            <Badge variant="outline" className={`text-[9px] h-5 ${
+                              walletWordCount === 12
+                                ? 'border-amber-500/30 text-amber-400 bg-amber-500/10'
+                                : 'border-emerald-500/30 text-emerald-400 bg-emerald-500/10'
+                            }`}>
+                              {walletWordCount === 12 ? 'Strong' : 'Very Strong'}
+                            </Badge>
+                          </div>
+                        </div>
+                        {/* Wallet presets */}
+                        <div className="w-full">
+                          <div className="flex flex-wrap gap-1.5">
+                            {[
+                              { name: 'MetaMask', icon: '🦊', words: 12 },
+                              { name: 'Phantom', icon: '👻', words: 12 },
+                              { name: 'Ledger', icon: '🔐', words: 24 },
+                              { name: 'Trezor', icon: '🛡', words: 12 },
+                              { name: 'Trust Wallet', icon: '💎', words: 12 },
+                            ].map(preset => (
+                              <button
+                                key={preset.name}
+                                onClick={() => setWalletWordCount(preset.words as 12 | 24)}
+                                className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] transition-all ${
+                                  walletWordCount === preset.words
+                                    ? 'bg-zinc-800/60 text-zinc-300 border border-zinc-700/60 hover:border-emerald-500/30'
+                                    : 'bg-zinc-900/40 text-zinc-600 border border-zinc-800/40 hover:text-zinc-400'
+                                }`}
+                              >
+                                <span className="text-xs">{preset.icon}</span>
+                                {preset.name}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="ml-auto flex items-center gap-2">
+                          <Button
+                            onClick={handleGenerateWallet}
+                            disabled={isGenerating || autoScanActive}
+                            className="bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white text-xs h-9 gap-1.5"
+                          >
+                            {isGenerating ? (
+                              <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Generating...</>
+                            ) : (
+                              <><Sparkles className="h-3.5 w-3.5" /> Generate Wallet</>
+                            )}
+                          </Button>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      {/* Import mode */}
+                      <div className="space-y-3">
+                        <div className="space-y-2">
+                          <Label className="text-xs text-zinc-400">Enter Your Seed Phrase</Label>
+                          <Textarea
+                            value={importMnemonic}
+                            onChange={(e) => { setImportMnemonic(e.target.value); setImportError('') }}
+                            placeholder="Enter your 12 or 24-word seed phrase separated by spaces..."
+                            className="bg-zinc-900/80 border-zinc-700/60 text-sm font-mono text-zinc-200 placeholder:text-zinc-600 min-h-[80px] resize-none focus:border-cyan-500/50 focus:ring-cyan-500/20"
+                          />
+                          {importError && (
+                            <p className="text-[10px] text-red-400 flex items-center gap-1">
+                              <XCircle className="h-3 w-3" />
+                              {importError}
+                            </p>
+                          )}
+                          <div className="flex items-center gap-2 text-[10px] text-zinc-600">
+                            <span>{importMnemonic.trim().split(/\s+/).filter(w => w).length} words entered</span>
+                            {importMnemonic.trim() && (
+                              <Badge variant="outline" className={`text-[9px] h-4 ${
+                                [12, 24].includes(importMnemonic.trim().split(/\s+/).filter(w => w).length)
+                                  ? 'border-emerald-500/30 text-emerald-400 bg-emerald-500/10'
+                                  : 'border-zinc-700 text-zinc-500'
+                              }`}>
+                                {[12, 24].includes(importMnemonic.trim().split(/\s+/).filter(w => w).length) ? 'Valid length' : 'Need 12 or 24'}
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                        <Button
+                          onClick={handleImportWallet}
+                          disabled={isGenerating || !importMnemonic.trim()}
+                          className="bg-gradient-to-r from-cyan-600 to-emerald-600 hover:from-cyan-500 hover:to-emerald-500 text-white text-xs h-9 gap-1.5"
+                        >
+                          {isGenerating ? (
+                            <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Deriving & Checking...</>
+                          ) : (
+                            <><Search className="h-3.5 w-3.5" /> Derive & Check Balances</>
+                          )}
+                        </Button>
+                      </div>
+                    </>
+                  )}
 
                   {/* Auto-scan controls */}
                   <div className="border border-zinc-800/60 rounded-xl p-4 space-y-3 bg-zinc-900/30">
@@ -3737,8 +3916,19 @@ export default function Home() {
                             Copy
                           </Button>
                         </div>
-                        <div className="bg-zinc-900/80 rounded-lg p-3 font-mono text-xs text-emerald-300 leading-relaxed border border-zinc-800/60 select-all">
-                          {generatedMnemonic}
+                        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-1.5">
+                          {generatedMnemonic.split(' ').map((word, i) => (
+                            <motion.div
+                              key={i}
+                              initial={{ opacity: 0, scale: 0.8 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              transition={{ delay: i * 0.03, duration: 0.2 }}
+                              className="flex items-center gap-1 bg-zinc-800/80 border border-zinc-700/60 rounded-md px-2 py-1.5 group hover:border-emerald-500/40 transition-colors"
+                            >
+                              <span className="text-[9px] font-bold text-zinc-600 w-4 shrink-0">{i + 1}</span>
+                              <span className="text-xs font-mono text-emerald-300 truncate">{word}</span>
+                            </motion.div>
+                          ))}
                         </div>
                         <p className="text-[10px] text-amber-500/80 mt-2 flex items-center gap-1">
                           <AlertTriangle className="h-3 w-3" />
@@ -3799,7 +3989,13 @@ export default function Home() {
                               const hoverBorderColor = addr.blockchain === 'btc' ? 'hover:border-orange-500/40' : addr.blockchain === 'eth' ? 'hover:border-emerald-500/40' : addr.blockchain === 'sol' ? 'hover:border-cyan-500/40' : 'hover:border-teal-500/40'
                               const hasBalance = balanceInfo && parseFloat(balanceInfo.balance) > 0
                               return (
-                                <Card key={idx} className={`bg-zinc-900/40 border-zinc-800/50 border-l-2 ${borderColor} ${hoverBorderColor} hover:scale-[1.01] transition-all duration-200 overflow-hidden`}>
+                                <Card key={idx} className={`bg-zinc-900/40 border-zinc-800/50 border-l-2 ${borderColor} ${hoverBorderColor} hover:scale-[1.01] transition-all duration-200 overflow-hidden relative`}>
+                                  <div className={`absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r ${
+                                    addr.blockchain === 'btc' ? 'from-orange-500 to-orange-400' :
+                                    addr.blockchain === 'eth' ? 'from-emerald-500 to-emerald-400' :
+                                    addr.blockchain === 'sol' ? 'from-cyan-500 to-cyan-400' :
+                                    'from-teal-500 to-teal-400'
+                                  }`} />
                                   <CardContent className="p-3 space-y-2">
                                     <div className="flex items-center justify-between">
                                       <div className="flex items-center gap-1.5">

@@ -1,7 +1,56 @@
 # CryptoRecover - Work Log
 
 ## Project Status
-**v3.0 - Wallet Generator + Auto-Scan** - All 4 blockchains working. Latest: Complete Wallet Generator tab with random 12/24-word seed phrase generation, multi-chain address derivation, balance checking, auto-scan mode, and recovery integration.
+**v3.1 - Wallet Import + Visual Enhancements** - All 4 blockchains working. Latest: Wallet Import mode (paste existing seed phrase to derive + auto-check balances), visual mnemonic word pills, wallet type presets, gradient top bars on address cards.
+
+---
+Task ID: 9
+Agent: main (cron review)
+Task: Assess project, QA test, improve styling, add features, update worklog
+
+Work Log:
+- Read worklog.md to understand project status (v3.0, Wallet Generator with auto-scan)
+- QA tested all 5 tabs via agent-browser: Recovery, Quick Verify, History, Word List, Wallet - all working
+- No page errors or console errors found
+- Lint check: ✅ Clean
+- Added Wallet Import feature:
+  - New mode toggle (Generate / Import) at top of Wallet tab
+  - Import mode: Textarea for pasting existing 12 or 24-word seed phrase
+  - Real-time word count with "Valid length" / "Need 12 or 24" badge
+  - BIP39 wordlist validation before derivation
+  - "Derive & Check Balances" button that auto-derives addresses + auto-checks all balances
+  - Error display for invalid seed phrases (checksum failure, invalid words)
+  - New state: walletMode, importMnemonic, importError
+  - New handler: handleImportWallet()
+- Added Visual Mnemonic Word Display:
+  - Replaced plain text mnemonic display with grid of individual word pills
+  - Each pill shows index number + word, with staggered framer-motion animation
+  - Responsive grid: 3 cols mobile, 4 cols sm, 6 cols md+
+  - Hover effect: border changes to emerald
+- Added Wallet Type Presets:
+  - 5 preset buttons: MetaMask (🦊, 12w), Phantom (👻, 12w), Ledger (🔐, 24w), Trezor (🛡, 12w), Trust Wallet (💎, 12w)
+  - Clicking a preset auto-selects the corresponding word count
+- Added Gradient Top Bars on Derived Address Cards:
+  - 2px gradient bar at top of each address card matching chain color
+  - BTC: orange gradient, ETH: emerald gradient, SOL: cyan gradient, XRP: teal gradient
+  - Cards now have `relative` positioning for absolute gradient bar
+- Tested all new features via agent-browser:
+  - Mode toggle (Generate/Import): ✅
+  - Import with test mnemonic "abandon*11 + about": ✅ (derived 4 addresses, auto-checked balances)
+  - "Valid length" badge shows for 12-word input: ✅
+  - Wallet presets (MetaMask, Phantom, etc.): ✅
+  - Generate mode still works: ✅
+  - No page errors: ✅
+- Ran `bun run lint` - ✅ Clean
+
+Stage Summary:
+- No bugs found during QA - project is stable
+- 4 new features added: Wallet Import mode, visual word pills, wallet presets, gradient top bars
+- New state variables: walletMode, importMnemonic, importError
+- New handler: handleImportWallet() with BIP39 validation, auto-derive, auto-balance-check
+- Page.tsx grew from ~4207 to ~4340 lines
+- All changes backward-compatible, existing functionality unchanged
+- Lint: ✅ Clean | Dev server: ✅ Running | agent-browser: ✅ All features tested
 
 ---
 Task ID: 8
