@@ -1,7 +1,50 @@
 # CryptoRecover - Work Log
 
 ## Project Status
-**v3.1 - Wallet Import + Visual Enhancements** - All 4 blockchains working. Latest: Wallet Import mode (paste existing seed phrase to derive + auto-check balances), visual mnemonic word pills, wallet type presets, gradient top bars on address cards.
+**v4.0 - Turbo Scan Engine + UI Enhancements** - All 4 blockchains working. Latest: High-speed Turbo Scan with streaming derivation engine, speed sparkline chart, 5-stat grid, auto-stop limits, scan mode labels with speed estimates.
+
+---
+Task ID: 10
+Agent: main (session continuation)
+Task: Optimize wallet generation and balance checking for high throughput (target 100k/min), enhance Turbo Scan UI
+
+Work Log:
+- Read worklog.md and all source files to understand project status (v3.1)
+- Attempted worker_threads mini-service approach but Bun had compatibility issues with TypeScript workers
+- Removed broken scanner mini-service, reverted to in-process scanning
+- Rewrote wallet-scanner.ts with key optimizations:
+  1. **Streaming callback pattern** - `generateAndDeriveStream()` processes wallets one-by-one via callback, avoiding memory accumulation from storing all results in arrays
+  2. **Async seed derivation with event loop yielding** - Uses `bip39.mnemonicToSeed()` (async) instead of sync version to prevent event loop blocking. Yields to event loop every 5 wallets via `setImmediate`
+  3. **`deriveAddressesFromSeedSync()`** - Sync address derivation from seed buffer (fast, since PBKDF2 is done in async mnemonicToSeed)
+  4. **Rate-limited balance checking** - `checkBalancesBatch()` processes in chunks of 20 concurrent API calls
+  5. **Auto-stop limits** - MAX_BATCHES = 20 to prevent OOM crashes (auto-completes the job)
+  6. **Speed history tracking** - Records `{ time, scanned }` data points for sparkline chart
+- Updated scan API route (`/api/wallet/scan`):
+  - Unified `startScanJob()` function replacing 3 separate functions
+  - Returns `mode`, `balanceCheckPercent`, `speedHistory` in GET response
+  - Reduced default batch sizes to prevent OOM (fast: 100, balanced: 50, full: 25)
+- Enhanced Turbo Scan UI:
+  1. **5-stat grid** - Scanned, Speed (w/s), Per Min, Elapsed, Found (was 4 stats)
+  2. **Speed sparkline chart** - Live bar chart showing speed between data points (last 40 bars), color-coded by relative speed
+  3. **Live speed badge** in header - Shows wallets/min while scanning with pulsing animation
+  4. **Realistic speed estimates** on mode cards: Fast ~5k/min, Balanced ~500/min, Full ~50/min
+  5. **Speed milestone badges** - 🚀 High speed! (5k+), ⚡ Gen only / % balance check (500-5k), API-limited (<500)
+  6. **Enhanced stopped state** - Shows average throughput in wallets/min
+  7. **Thicker progress bar** (1.5px)
+- Updated scanStatus type to include `mode`, `balanceCheckPercent`, `speedHistory`
+- Tested scan API end-to-end: ✅ Running at 80-87 wallets/s (~5,000/min) for ETH-only fast mode
+- Memory monitoring: Stable at ~1.2GB with `--max-old-space-size=2048` NODE_OPTIONS
+- Lint: ✅ Clean
+
+Stage Summary:
+- Turbo Scan engine rewritten with streaming pattern for memory safety
+- Achieved ~5,000 wallets/min in fast mode (ETH-only, no balance checking)
+- Server stays alive with auto-stop limits (20 batches)
+- PBKDF2 is the bottleneck (~11ms per wallet) - cannot reach 100k/min without native C++ acceleration
+- Enhanced UI with sparkline chart, 5-stat grid, speed milestone badges
+- Scan API returns new fields: mode, balanceCheckPercent, speedHistory
+- Removed broken scanner mini-service
+- Lint: ✅ Clean | Dev server: ✅ Running with NODE_OPTIONS="--max-old-space-size=2048"
 
 ---
 Task ID: 9

@@ -606,7 +606,8 @@ export default function Home() {
   const [scanJobId, setScanJobId] = useState<string | null>(null)
   const [scanStatus, setScanStatus] = useState<{
     status: string; scanned: number; speed: number; found: { mnemonic: string; addresses: { blockchain: Blockchain; address: string; balance: string; symbol: string }[]; foundAt: number }[];
-    foundCount: number; elapsed: number; wordCount: number; chains: Blockchain[]; checkBalance: boolean; error?: string;
+    foundCount: number; elapsed: number; wordCount: number; chains: Blockchain[]; checkBalance: boolean; mode?: string; balanceCheckPercent?: number;
+    speedHistory?: { time: number; scanned: number }[]; error?: string;
   } | null>(null)
   const [scanMode, setScanMode] = useState<'fast' | 'balanced' | 'full'>('balanced')
   const [scanChains, setScanChains] = useState<Blockchain[]>(['eth', 'btc', 'sol', 'xrp'])
@@ -1690,7 +1691,7 @@ export default function Home() {
           wordCount: walletWordCount,
           chains: scanChains,
           mode: scanMode,
-          batchSize: scanMode === 'fast' ? 200 : scanMode === 'balanced' ? 100 : 50,
+          batchSize: scanMode === 'fast' ? 100 : scanMode === 'balanced' ? 50 : 25,
           balanceCheckPercent: scanBalancePercent,
         }),
       })
@@ -3905,23 +3906,31 @@ export default function Home() {
                         </div>
                         <div>
                           <span className="text-sm font-semibold text-zinc-200">Turbo Scan</span>
-                          <p className="text-[9px] text-zinc-500">High-speed server-side generation &middot; 100k+ wallets/min</p>
+                          <p className="text-[9px] text-zinc-500">Sync derivation engine &middot; 5k+ wallets/min</p>
                         </div>
                       </div>
-                      <Button
-                        onClick={isScanRunning ? handleStopScan : handleStartScan}
-                        variant={isScanRunning ? 'destructive' : 'default'}
-                        size="sm"
-                        className={`text-xs h-8 gap-1.5 ${
-                          !isScanRunning ? 'bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white border-0' : ''
-                        }`}
-                      >
-                        {isScanRunning ? (
-                          <><StopCircle className="h-3.5 w-3.5" /> Stop</>
-                        ) : (
-                          <><Zap className="h-3.5 w-3.5" /> Start Turbo Scan</>
+                      <div className="flex items-center gap-2">
+                        {isScanRunning && scanSpeed > 0 && (
+                          <Badge variant="outline" className="text-[9px] h-6 border-cyan-500/30 text-cyan-400 bg-cyan-500/10 animate-pulse">
+                            <Activity className="h-2.5 w-2.5 mr-1" />
+                            {formatNumber(scanSpeed * 60)}/min
+                          </Badge>
                         )}
-                      </Button>
+                        <Button
+                          onClick={isScanRunning ? handleStopScan : handleStartScan}
+                          variant={isScanRunning ? 'destructive' : 'default'}
+                          size="sm"
+                          className={`text-xs h-8 gap-1.5 ${
+                            !isScanRunning ? 'bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white border-0' : ''
+                          }`}
+                        >
+                          {isScanRunning ? (
+                            <><StopCircle className="h-3.5 w-3.5" /> Stop</>
+                          ) : (
+                            <><Zap className="h-3.5 w-3.5" /> Start Turbo Scan</>
+                          )}
+                        </Button>
+                      </div>
                     </div>
 
                     {/* Scan configuration */}
@@ -3932,9 +3941,9 @@ export default function Home() {
                           <Label className="text-xs text-zinc-400">Scan Mode</Label>
                           <div className="grid grid-cols-3 gap-2">
                             {[
-                              { mode: 'fast' as const, label: '⚡ Fast', desc: 'Gen only, no balance check', color: 'emerald' },
-                              { mode: 'balanced' as const, label: '⚖️ Balanced', desc: `Check ${scanBalancePercent}% balances`, color: 'cyan' },
-                              { mode: 'full' as const, label: '🔍 Full', desc: 'Check all balances', color: 'amber' },
+                              { mode: 'fast' as const, label: '⚡ Fast', desc: 'Gen+derive only, ~5k/min', est: '~5k/min', color: 'emerald' },
+                              { mode: 'balanced' as const, label: '⚖️ Balanced', desc: `Check ${scanBalancePercent}% balances`, est: '~500/min', color: 'cyan' },
+                              { mode: 'full' as const, label: '🔍 Full', desc: 'Check all balances', est: '~50/min', color: 'amber' },
                             ].map(opt => (
                               <button
                                 key={opt.mode}
@@ -3949,6 +3958,7 @@ export default function Home() {
                               >
                                 <p className="text-xs font-medium">{opt.label}</p>
                                 <p className="text-[9px] text-zinc-600 mt-0.5">{opt.desc}</p>
+                                <p className="text-[8px] text-zinc-700 mt-0.5 font-mono">{opt.est}</p>
                               </button>
                             ))}
                           </div>
@@ -4013,7 +4023,7 @@ export default function Home() {
                     {(isScanRunning || (scanStatus && scanStatus.status !== 'running')) && (
                       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-3">
                         {/* Stats grid */}
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                           <div className="bg-zinc-900/60 border border-zinc-800/50 rounded-lg p-2.5 text-center">
                             <p className="text-[9px] text-zinc-500 uppercase tracking-wider">Scanned</p>
                             <p className="text-lg font-bold font-mono text-zinc-100">{formatNumber(scanScanned)}</p>
@@ -4024,30 +4034,83 @@ export default function Home() {
                             <p className="text-[8px] text-zinc-600">wallets/s</p>
                           </div>
                           <div className="bg-zinc-900/60 border border-zinc-800/50 rounded-lg p-2.5 text-center">
-                            <p className="text-[9px] text-zinc-500 uppercase tracking-wider">Elapsed</p>
-                            <p className="text-lg font-bold font-mono text-amber-400">{formatTime(scanElapsed)}</p>
+                            <p className="text-[9px] text-zinc-500 uppercase tracking-wider">Per Min</p>
+                            <p className="text-lg font-bold font-mono text-amber-400">{scanSpeed > 0 ? formatNumber(scanSpeed * 60) : '—'}</p>
+                            <p className="text-[8px] text-zinc-600">wallets/min</p>
                           </div>
                           <div className="bg-zinc-900/60 border border-zinc-800/50 rounded-lg p-2.5 text-center">
+                            <p className="text-[9px] text-zinc-500 uppercase tracking-wider">Elapsed</p>
+                            <p className="text-lg font-bold font-mono text-zinc-300">{formatTime(scanElapsed)}</p>
+                          </div>
+                          <div className="bg-zinc-900/60 border border-zinc-800/50 rounded-lg p-2.5 text-center col-span-2 sm:col-span-1">
                             <p className="text-[9px] text-zinc-500 uppercase tracking-wider">Found</p>
                             <p className={`text-lg font-bold font-mono ${scanFound.length > 0 ? 'text-emerald-400' : 'text-zinc-500'}`}>{scanFound.length}</p>
+                            {scanFound.length > 0 && <p className="text-[8px] text-emerald-500">funded!</p>}
                           </div>
                         </div>
 
-                        {/* Speed projection */}
+                        {/* Speed sparkline chart */}
+                        {isScanRunning && scanStatus?.speedHistory && scanStatus.speedHistory.length > 2 && (
+                          <div className="bg-zinc-900/60 border border-zinc-800/50 rounded-lg p-3">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-[9px] text-zinc-500 uppercase tracking-wider">Speed History</span>
+                              <span className="text-[9px] font-mono text-cyan-400">
+                                {formatNumber(scanSpeed * 60)} wallets/min
+                              </span>
+                            </div>
+                            <div className="h-16 flex items-end gap-px">
+                              {(() => {
+                                const history = scanStatus.speedHistory || []
+                                if (history.length < 2) return null
+                                // Calculate speed between each data point
+                                const speeds: number[] = []
+                                for (let i = 1; i < history.length; i++) {
+                                  const dt = (history[i].time - history[i-1].time) / 1000
+                                  const ds = history[i].scanned - history[i-1].scanned
+                                  if (dt > 0) speeds.push(ds / dt)
+                                }
+                                if (speeds.length === 0) return null
+                                const maxSpeed = Math.max(...speeds, 1)
+                                return speeds.slice(-40).map((s, i) => (
+                                  <div
+                                    key={i}
+                                    className="flex-1 rounded-t-sm transition-all duration-300"
+                                    style={{
+                                      height: `${Math.max(4, (s / maxSpeed) * 100)}%`,
+                                      background: s >= maxSpeed * 0.8
+                                        ? 'linear-gradient(to top, rgb(6 182 212), rgb(16 185 129))'
+                                        : s >= maxSpeed * 0.5
+                                          ? 'linear-gradient(to top, rgb(6 182 212 / 0.6), rgb(6 182 212))'
+                                          : 'rgb(6 182 212 / 0.3)',
+                                      minHeight: '3px',
+                                    }}
+                                  />
+                                ))
+                              })()}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Speed projection bar */}
                         {isScanRunning && scanSpeed > 0 && (
                           <div className="flex items-center gap-2 bg-cyan-500/5 border border-cyan-500/20 rounded-lg px-3 py-2">
                             <Activity className="h-3.5 w-3.5 text-cyan-400 animate-pulse" />
                             <span className="text-[10px] text-cyan-300">
-                              Projected: <span className="font-mono font-bold">{formatNumber(scanSpeed * 60)}</span> wallets/min
+                              <span className="font-mono font-bold text-cyan-200">{formatNumber(scanSpeed * 60)}</span> wallets/min
                             </span>
-                            {scanMode === 'fast' && (
+                            {scanSpeed * 60 >= 5000 && (
                               <Badge variant="outline" className="text-[8px] h-4 border-emerald-500/30 text-emerald-400 bg-emerald-500/10 ml-auto">
-                                No balance check
+                                🚀 High speed!
                               </Badge>
                             )}
-                            {scanMode === 'balanced' && (
-                              <Badge variant="outline" className="text-[8px] h-4 border-cyan-500/30 text-cyan-400 bg-cyan-500/10 ml-auto">
-                                {scanBalancePercent}% balance check
+                            {scanSpeed * 60 < 5000 && scanSpeed * 60 >= 500 && (
+                              <Badge variant="outline" className="text-[8px] h-4 border-amber-500/30 text-amber-400 bg-amber-500/10 ml-auto">
+                                {scanMode === 'fast' ? '⚡ Gen only' : `${scanStatus?.balanceCheckPercent ?? scanBalancePercent}% balance check`}
+                              </Badge>
+                            )}
+                            {scanSpeed * 60 < 500 && (
+                              <Badge variant="outline" className="text-[8px] h-4 border-zinc-600 text-zinc-400 ml-auto">
+                                API-limited
                               </Badge>
                             )}
                           </div>
@@ -4055,19 +4118,23 @@ export default function Home() {
 
                         {/* Progress bar (indeterminate) */}
                         {isScanRunning && (
-                          <div className="h-1 bg-zinc-800 rounded-full overflow-hidden">
+                          <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
                             <div className="h-full bg-gradient-to-r from-amber-500 via-cyan-500 to-emerald-500 rounded-full animate-scan-progress" />
                           </div>
                         )}
 
                         {/* Stopped status */}
                         {scanStatus && scanStatus.status === 'stopped' && (
-                          <div className="flex items-center gap-2 bg-zinc-800/40 border border-zinc-700/50 rounded-lg px-3 py-2">
-                            <StopCircle className="h-3.5 w-3.5 text-zinc-400" />
-                            <span className="text-[10px] text-zinc-400">
-                              Scan stopped. Checked <span className="font-mono text-zinc-300">{formatNumber(scanScanned)}</span> wallets
+                          <div className="flex items-center gap-3 bg-zinc-800/40 border border-zinc-700/50 rounded-lg px-3 py-2.5">
+                            <StopCircle className="h-4 w-4 text-zinc-400" />
+                            <div className="text-[10px] text-zinc-400">
+                              <p>Scan stopped. Checked <span className="font-mono text-zinc-300">{formatNumber(scanScanned)}</span> wallets
                               {scanSpeed > 0 && <> at avg <span className="font-mono text-cyan-400">{formatNumber(scanSpeed)}</span>/s</>}.
-                            </span>
+                              </p>
+                              {scanSpeed > 0 && (
+                                <p className="text-zinc-500 mt-0.5">Average throughput: <span className="font-mono text-amber-400">{formatNumber(scanSpeed * 60)}</span> wallets/min</p>
+                              )}
+                            </div>
                           </div>
                         )}
                       </motion.div>
