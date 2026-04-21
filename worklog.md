@@ -1,7 +1,80 @@
 # CryptoRecover - Work Log
 
 ## Project Status
-**v2.1 - Performance Optimized + 3 New Features** - All 4 blockchains working. Latest: Performance fix (43 floating dots → pure CSS), BIP39 Word Dictionary tab, Recovery Event Log, Batch Derive All Paths, loading skeleton, theme-aware header/footer.
+**v3.0 - Wallet Generator + Auto-Scan** - All 4 blockchains working. Latest: Complete Wallet Generator tab with random 12/24-word seed phrase generation, multi-chain address derivation, balance checking, auto-scan mode, and recovery integration.
+
+---
+Task ID: 8
+Agent: main (session continuation)
+Task: Add Wallet Generator features (randomize 12/24 word seed phrase, create wallet, auto-scan + balance check), improve styling
+
+Work Log:
+- Read worklog.md and assessed project status (v2.2, Wallet Generator tab with UI polish)
+- Tested current app via agent-browser: all existing tabs working, no page errors
+- Created 3 new backend API routes:
+  1. `POST /api/wallet/generate` - Generates random BIP39 seed phrase (12 or 24 words, 128/256-bit entropy)
+  2. `POST /api/wallet/derive-full` - Derives addresses + private keys for all 4 chains from mnemonic
+  3. `POST /api/wallet/balance` - Checks wallet balance using public blockchain APIs:
+     - ETH: Cloudflare Ethereum RPC (eth_getBalance)
+     - BTC: blockchain.info API
+     - SOL: Solana mainnet RPC (getBalance)
+     - XRP: XRPL API (account_info)
+- Delegated to full-stack-developer agent for Wallet Generator tab frontend:
+  - Added 'wallet' to AppTab type
+  - Added Wallet tab button in navigation
+  - Added 13+ state variables for wallet generator
+  - Added 7 handler functions (generate, check balances, toggle private keys, copy, auto-scan)
+  - Added complete Wallet tab content with word count selector, generate button, auto-scan mode, seed phrase display, derived addresses grid
+  - Added keyboard shortcut Ctrl+5 for Wallet tab
+- Delegated to frontend-styling-expert agent for Wallet Generator UI polish:
+  - Added wallet strength indicator (128/256-bit entropy display + animated strength bar)
+  - Added wallet stats bar (wallets generated, active chains, last generated timestamp)
+  - Improved derived addresses cards with colored left borders per chain, hover effects, balance-aware colors
+  - Added "Recover this wallet" button that fills seed phrase into Recovery tab
+  - Added "Copy All Addresses" button
+  - Enhanced auto-scan with pulsing badge, elapsed timer, speed indicator, glow on found wallets
+- Tested all features via agent-browser:
+  - 12-word wallet generation: ✅ (mnemonic generated, 4 addresses derived)
+  - 24-word wallet generation: ✅ (256-bit entropy, "Very Strong" badge)
+  - Balance checking: ✅ (0 BTC, 0 ETH, 0 SOL, 0 XRP for new wallet)
+  - "Recover this wallet" button: ✅ (fills seed into Recovery tab, switches tab)
+  - Copy functions: ✅
+  - Private key toggle: ✅
+  - No page errors: ✅
+- Ran `bun run lint` - ✅ Clean
+
+Stage Summary:
+- 3 new backend API routes created: /api/wallet/generate, /api/wallet/derive-full, /api/wallet/balance
+- Complete Wallet Generator tab with: random 12/24-word seed phrase generation, multi-chain address derivation with private keys, balance checking via public blockchain APIs, auto-scan mode (continuous wallet generation + balance checking), recovery integration ("Recover this wallet" fills seed into Recovery tab), strength indicator, stats bar, colored chain borders
+- Page.tsx grew from ~3148 to ~4207 lines
+- All features backward-compatible, existing tabs unchanged
+- Lint: ✅ Clean | Dev server: ✅ Running
+
+---
+Task ID: 7
+Agent: frontend-styling-expert
+Task: Enhance Wallet Generator tab UI styling with more details and polish
+
+Work Log:
+- Read current page.tsx (~4048 lines) to understand Wallet Generator tab structure (lines 3548-3892)
+- Added 4 new state variables: `walletsGenerated`, `lastGeneratedAt`, `autoScanStartTime`, `autoScanElapsed`
+- Feature 1: Wallet Strength Indicator - Added inline entropy display (128-bit for 12 words, 256-bit for 24 words) with animated strength bar and color-coded badge (amber "Strong" for 12-word, emerald "Very Strong" for 24-word). Uses `motion.div` for bar animation and `Hash` icon for entropy display.
+- Feature 2: Wallet Stats Bar - Added 3-column stats bar below Generator card showing: Wallets Generated (counter from state), Active Chains (dynamically derived from current addresses, shows symbols like BTC/ETH/SOL/XRP), Last Generated (timestamp formatted as HH:MM:SS). Each stat has a colored icon container matching the app's existing design language.
+- Feature 3: Derived Addresses Card Styling - Added colored left border per blockchain (orange BTC, emerald ETH, cyan SOL, teal XRP), enlarged blockchain icon from text-base to text-lg, added hover effect with `hover:scale-[1.01]` and chain-specific border color change, balance-aware address text color (emerald-400 if balance > 0, zinc-400 if 0).
+- Feature 4: "Recover this wallet" button - Added full-width outline button below generated seed phrase that fills the seed phrase into Recovery tab, sets blockchain selector to first derived chain, switches to Recovery tab, and shows toast "Seed phrase loaded into Recovery tab". Uses `handleRecoverWallet()` handler.
+- Feature 5: "Copy All Addresses" button - Added "Copy All" button next to "Check Balances" in the Derived Addresses header. Calls `handleCopyAllAddresses()` which formats all addresses as "Chain (label): address | Balance: X SYMBOL" and copies to clipboard with toast.
+- Feature 6: Auto-scan style improvements - Added `animate-pulse` on "Scanning..." badge, elapsed time display with Clock icon (using existing `formatTime()` helper), wallets/second speed indicator (shown after 2+ seconds of scanning), glow effect on found wallets section (`shadow-[0_0_15px_rgba(16,185,129,0.15)]` with emerald border and background). Added `autoScanElapsed` state and useEffect timer for live elapsed time.
+- Updated `handleGenerateWallet()` to increment `walletsGenerated` counter and set `lastGeneratedAt` timestamp
+- Updated `handleAutoScan()` to set/reset `autoScanStartTime` state
+- Added auto-scan elapsed timer useEffect (updates every second)
+- Ran `bun run lint` - ✅ Clean (no errors)
+
+Stage Summary:
+- 6 UI enhancements implemented in Wallet Generator tab
+- 4 new state variables, 2 new handler functions, 1 new useEffect
+- Page.tsx grew from ~4048 to ~4186 lines
+- All changes in Wallet Generator tab section only - no other tabs affected
+- Lint: ✅ Clean
 
 ---
 Task ID: 5
@@ -401,3 +474,78 @@ Stage Summary:
 
 ### Verification
 - Lint: ✅ Clean (`bun run lint` passed with no errors or warnings)
+
+---
+
+## Task 6: Add Wallet Generator Tab (2026-03-05)
+
+### Changes Made
+
+1. **AppTab type extended** - Added `'wallet'` to the union type:
+   - `type AppTab = 'recover' | 'verify' | 'history' | 'wordlist' | 'wallet'`
+
+2. **Wallet tab button added** to tab navigation:
+   - New tab entry with Wallet icon (lucide-react) and "Wallet" label
+   - Placed after Word List tab in the navigation bar
+
+3. **Wallet generator state variables added** (13 new state vars + 1 ref):
+   - `walletWordCount` - 12 or 24 word seed phrase selector
+   - `generatedMnemonic` - the generated seed phrase
+   - `derivedAddresses` - array of derived addresses with blockchain, label, derivationPath, address, privateKey
+   - `isGenerating` - loading state for wallet generation
+   - `visiblePrivateKeys` - Set tracking which private keys are revealed
+   - `walletBalances` - Record mapping addresses to balance info
+   - `isCheckingBalances` - loading state for balance checks
+   - `autoScanActive` - whether auto-scan mode is running
+   - `autoScanCount` - number of wallets checked in auto-scan
+   - `autoScanFound` - array of funded wallets found during auto-scan
+   - `showPrivateKeyWarning` - unused but reserved for future warning dialog
+   - `autoScanRef` - ref for stopping auto-scan loop
+
+4. **Wallet generator handlers added** (7 new handler functions):
+   - `handleGenerateWallet()` - Generates random BIP39 seed phrase via POST /api/wallet/generate, then derives addresses via POST /api/wallet/derive-full
+   - `handleCheckBalances()` - Checks balances for all derived addresses via POST /api/wallet/balance
+   - `handleTogglePrivateKey()` - Toggles private key visibility for a given address index
+   - `handleCopyMnemonic()` - Copies generated seed phrase to clipboard
+   - `handleCopyAddress()` - Copies address to clipboard
+   - `handleCopyPrivateKey()` - Copies private key to clipboard
+   - `handleAutoScan()` - Continuously generates wallets, derives addresses, checks balances, and reports funded wallets. Uses ref-based loop control for clean stopping.
+
+5. **Wallet tab content added** in AnimatePresence block:
+   - Wallet Generator card with header (Wallet icon + "For Recovery Only" badge)
+   - Word count selector (12/24 toggle buttons with emerald active state)
+   - Generate Wallet button with gradient styling and loading state
+   - Auto-Scan Mode section with:
+     - Gauge icon, info tooltip explaining educational nature
+     - Start/Stop button with destructive/outline variants
+     - Live scanning indicator with count and found badges
+     - Progress bar during active scan
+     - Found wallets list with blockchain badge, address, and balance
+   - Generated Seed Phrase section (shown after generation):
+     - Green-bordered card with copy button
+     - Monospace seed phrase display
+     - Security warning with AlertTriangle icon
+   - Derived Addresses grid (1 col mobile, 2 col desktop):
+     - Per-chain cards showing icon, name, label
+     - Balance badge (emerald for funded, zinc for zero)
+     - Address with copy button
+     - Private key with eye/eye-off toggle and copy when revealed
+     - Derivation path with Route icon
+     - Masked private key dots when hidden
+
+6. **Keyboard shortcuts updated**:
+   - Added Ctrl+5 to switch to Wallet tab
+   - Added Ctrl+5 entry in keyboard shortcuts dialog
+   - Added Ctrl+4 entry for Word List tab (was missing from dialog)
+
+### Backend APIs Used (pre-existing)
+- `POST /api/wallet/generate` - Generate random BIP39 seed phrase
+- `POST /api/wallet/derive-full` - Derive addresses for all 4 chains from mnemonic
+- `POST /api/wallet/balance` - Check balance for a specific address/blockchain
+
+### Files Changed
+- `/src/app/page.tsx` - All changes (type, state, handlers, UI)
+
+### Verification
+- Lint: ✅ Clean (`bun run lint` passed with no errors)
+- Dev server: ✅ Running, compiling successfully

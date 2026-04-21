@@ -96,7 +96,7 @@ import { Textarea } from '@/components/ui/textarea'
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 type Blockchain = 'btc' | 'eth' | 'sol' | 'xrp'
-type AppTab = 'recover' | 'verify' | 'history' | 'wordlist'
+type AppTab = 'recover' | 'verify' | 'history' | 'wordlist' | 'wallet'
 
 interface RecoveryJob {
   id: string
@@ -580,6 +580,24 @@ export default function Home() {
   // Track previous path index for path switch notification
   const prevPathIndexRef = useRef<number | undefined>(undefined)
 
+  // Wallet generator state
+  const [walletWordCount, setWalletWordCount] = useState<12 | 24>(12)
+  const [generatedMnemonic, setGeneratedMnemonic] = useState('')
+  const [derivedAddresses, setDerivedAddresses] = useState<{ blockchain: Blockchain; label: string; derivationPath: string; address: string; privateKey: string }[]>([])
+  const [isGenerating, setIsGenerating] = useState(false)
+  const [visiblePrivateKeys, setVisiblePrivateKeys] = useState<Set<number>>(new Set())
+  const [walletBalances, setWalletBalances] = useState<Record<string, { balance: string; symbol: string; error?: string }>>({})
+  const [isCheckingBalances, setIsCheckingBalances] = useState(false)
+  const [autoScanActive, setAutoScanActive] = useState(false)
+  const [autoScanCount, setAutoScanCount] = useState(0)
+  const [autoScanFound, setAutoScanFound] = useState<{ mnemonic: string; address: string; blockchain: Blockchain; balance: string }[]>([])
+  const [showPrivateKeyWarning, setShowPrivateKeyWarning] = useState(false)
+  const autoScanRef = useRef(false)
+  const [walletsGenerated, setWalletsGenerated] = useState(0)
+  const [lastGeneratedAt, setLastGeneratedAt] = useState<number | null>(null)
+  const [autoScanStartTime, setAutoScanStartTime] = useState<number | null>(null)
+  const [autoScanElapsed, setAutoScanElapsed] = useState(0)
+
   // ── Count-up animation for stats ──
   const [countUpDone, setCountUpDone] = useState(false)
   const [countUpValues, setCountUpValues] = useState({ blockchains: 0, words: 0, paths: 0 })
@@ -853,6 +871,9 @@ export default function Home() {
       } else if (e.ctrlKey && e.key === '4') {
         e.preventDefault()
         setActiveTab('wordlist')
+      } else if (e.ctrlKey && e.key === '5') {
+        e.preventDefault()
+        setActiveTab('wallet')
       }
       // Ctrl+Enter to start recovery (when on Recovery tab)
       if (e.ctrlKey && e.key === 'Enter' && activeTab === 'recover') {
@@ -1335,6 +1356,221 @@ export default function Home() {
     }
   }
 
+  // ── Wallet Generator Handlers ──
+  const handleGenerateWallet = async () => {
+    setIsGenerating(true)
+    setDerivedAddresses([])
+    setWalletBalances({})
+    try {
+      const res = await fetch('/api/wallet/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ wordCount: walletWordCount }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to generate wallet')
+        return
+      }
+      setGeneratedMnemonic(data.mnemonic)
+      setWalletsGenerated(prev => prev + 1)
+      setLastGeneratedAt(Date.now())
+      // Derive addresses
+      const deriveRes = await fetch('/api/wallet/derive-full', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mnemonic: data.mnemonic }),
+      })
+      const deriveData = await deriveRes.json()
+      if (deriveRes.ok && deriveData.addresses) {
+        setDerivedAddresses(deriveData.addresses)
+        toast.success(`Wallet generated! ${deriveData.addresses.length} addresses derived`)
+      }
+    } catch {
+      toast.error('Network error')
+    } finally {
+      setIsGenerating(false)
+    }
+  }
+
+  const handleCheckBalances = async () => {
+    if (derivedAddresses.length === 0) return
+    setIsCheckingBalances(true)
+    const newBalances: Record<string, { balance: string; symbol: string; error?: string }> = {}
+    for (const addr of derivedAddresses) {
+      try {
+        const res = await fetch('/api/wallet/balance', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ address: addr.address, blockchain: addr.blockchain }),
+        })
+        const data = await res.json()
+        newBalances[addr.address] = { balance: data.balance, symbol: data.symbol, error: data.error }
+      } catch {
+        newBalances[addr.address] = { balance: '0', symbol: '', error: 'Network error' }
+      }
+    }
+    setWalletBalances(newBalances)
+    setIsCheckingBalances(false)
+    toast.success('Balance check complete')
+  }
+
+  const handleTogglePrivateKey = (index: number) => {
+    setVisiblePrivateKeys(prev => {
+      const next = new Set(prev)
+      if (next.has(index)) next.delete(index)
+      else next.add(index)
+      return next
+    })
+  }
+
+  const handleCopyMnemonic = () => {
+    if (generatedMnemonic) {
+      navigator.clipboard.writeText(generatedMnemonic)
+      toast.success('Seed phrase copied to clipboard')
+    }
+  }
+
+  const handleCopyAddress = (address: string) => {
+    navigator.clipboard.writeText(address)
+    toast.success('Address copied to clipboard')
+  }
+
+  const handleCopyPrivateKey = (key: string) => {
+    navigator.clipboard.writeText(key)
+    toast.success('Private key copied to clipboard')
+  }
+
+  const handleRecoverWallet = (targetBlockchain: Blockchain) => {
+    if (!generatedMnemonic) return
+    // Fill the seed phrase into the Recovery tab
+    const mnemonicWords = generatedMnemonic.trim().split(/\s+/)
+    const targetCount = (mnemonicWords.length === 24 ? 24 : 12) as 12 | 24
+    setWordCount(targetCount)
+    const newWords: (string | null)[] = Array(targetCount).fill('')
+    const newInputValues: string[] = Array(targetCount).fill('')
+    for (let i = 0; i < Math.min(mnemonicWords.length, targetCount); i++) {
+      newWords[i] = mnemonicWords[i].toLowerCase()
+      newInputValues[i] = mnemonicWords[i].toLowerCase()
+    }
+    setWords(newWords)
+    setInputValues(newInputValues)
+    // Set blockchain selector
+    setBlockchain(targetBlockchain)
+    const paths = BLOCKCHAIN_CONFIG[targetBlockchain].paths
+    if (paths.length > 0) {
+      setDerivationPath(paths[0].path)
+    }
+    // Switch to Recovery tab
+    setActiveTab('recover')
+    toast.success('Seed phrase loaded into Recovery tab')
+  }
+
+  const handleCopyAllAddresses = () => {
+    if (derivedAddresses.length === 0) return
+    const lines = derivedAddresses.map(addr => {
+      const chainConfig = BLOCKCHAIN_CONFIG[addr.blockchain as Blockchain]
+      const balanceInfo = walletBalances[addr.address]
+      const balanceStr = balanceInfo ? ` | Balance: ${balanceInfo.balance} ${balanceInfo.symbol}` : ''
+      return `${chainConfig?.name || addr.blockchain} (${addr.label}): ${addr.address}${balanceStr}`
+    })
+    navigator.clipboard.writeText(lines.join('\n'))
+    toast.success('All addresses copied to clipboard')
+  }
+
+  // Auto-scan: continuously generate wallets and check balances
+  const handleAutoScan = async () => {
+    if (autoScanActive) {
+      autoScanRef.current = false
+      setAutoScanActive(false)
+      setAutoScanStartTime(null)
+      toast.info('Auto-scan stopped')
+      return
+    }
+
+    autoScanRef.current = true
+    setAutoScanActive(true)
+    setAutoScanFound([])
+    setAutoScanCount(0)
+    setAutoScanStartTime(Date.now())
+    setAutoScanElapsed(0)
+    toast.info('Auto-scan started! Generating wallets and checking balances...')
+
+    let count = 0
+    while (autoScanRef.current) {
+      try {
+        // Generate a new wallet
+        const genRes = await fetch('/api/wallet/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ wordCount: walletWordCount }),
+        })
+        const genData = await genRes.json()
+        if (!genRes.ok || !genData.mnemonic) break
+
+        // Derive addresses
+        const deriveRes = await fetch('/api/wallet/derive-full', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mnemonic: genData.mnemonic }),
+        })
+        const deriveData = await deriveRes.json()
+        if (!deriveRes.ok || !deriveData.addresses) continue
+
+        count++
+        setAutoScanCount(count)
+        setGeneratedMnemonic(genData.mnemonic)
+        setDerivedAddresses(deriveData.addresses)
+
+        // Check balances for all derived addresses
+        for (const addr of deriveData.addresses) {
+          if (!autoScanRef.current) break
+          try {
+            const balRes = await fetch('/api/wallet/balance', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ address: addr.address, blockchain: addr.blockchain }),
+            })
+            const balData = await balRes.json()
+            const balance = parseFloat(balData.balance || '0')
+            if (balance > 0) {
+              setAutoScanFound(prev => [...prev, {
+                mnemonic: genData.mnemonic,
+                address: addr.address,
+                blockchain: addr.blockchain,
+                balance: balData.balance,
+              }])
+              toast.success(`Found funded wallet! ${balData.balance} ${balData.symbol} on ${addr.blockchain.toUpperCase()}`)
+            }
+            setWalletBalances(prev => ({
+              ...prev,
+              [addr.address]: { balance: balData.balance, symbol: balData.symbol, error: balData.error },
+            }))
+          } catch {
+            // skip
+          }
+        }
+      } catch {
+        // Continue on error
+        await new Promise(r => setTimeout(r, 1000))
+      }
+      // Small delay between wallets
+      await new Promise(r => setTimeout(r, 500))
+    }
+  }
+
+  // ── Auto-scan elapsed timer ──
+  useEffect(() => {
+    if (autoScanActive && autoScanStartTime) {
+      const interval = setInterval(() => {
+        setAutoScanElapsed((Date.now() - autoScanStartTime) / 1000)
+      }, 1000)
+      return () => clearInterval(interval)
+    } else {
+      setAutoScanElapsed(0)
+    }
+  }, [autoScanActive, autoScanStartTime])
+
   // ─── Render ────────────────────────────────────────────────────────────────
 
   return (
@@ -1570,6 +1806,7 @@ export default function Home() {
             { id: 'verify' as AppTab, label: 'Quick Verify', icon: <CheckCircle2 className="h-3.5 w-3.5" /> },
             { id: 'history' as AppTab, label: 'History', icon: <History className="h-3.5 w-3.5" /> },
             { id: 'wordlist' as AppTab, label: 'Word List', icon: <BookOpen className="h-3.5 w-3.5" /> },
+            { id: 'wallet' as AppTab, label: 'Wallet', icon: <Wallet className="h-3.5 w-3.5" /> },
           ] as const).map((tab) => (
             <button
               key={tab.id}
@@ -3306,6 +3543,392 @@ export default function Home() {
               </Card>
             </motion.div>
           )}
+
+          {/* ── Wallet Generator Tab ── */}
+          {activeTab === 'wallet' && (
+            <motion.div
+              key="wallet"
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 20 }}
+              transition={{ duration: 0.2 }}
+              className="space-y-5"
+            >
+              {/* Generator Controls */}
+              <Card className="bg-zinc-900/40 border-zinc-800/50">
+                <CardHeader className="pb-3">
+                  <div className="flex items-center gap-2">
+                    <Wallet className="h-4 w-4 text-emerald-400" />
+                    <CardTitle className="text-base font-semibold">Wallet Generator</CardTitle>
+                    <Badge variant="outline" className="ml-auto text-[9px] gap-1 h-5 border-amber-500/30 text-amber-400 bg-amber-500/10">
+                      <AlertTriangle className="h-2.5 w-2.5" />
+                      For Recovery Only
+                    </Badge>
+                  </div>
+                  <CardDescription className="text-xs text-zinc-500">
+                    Generate a random BIP39 seed phrase and derive wallet addresses across multiple blockchains.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {/* Word count selector + strength indicator */}
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <Label className="text-xs text-zinc-400">Word Count</Label>
+                    <div className="flex items-center gap-2 bg-zinc-800/60 rounded-lg p-1">
+                      <button
+                        onClick={() => setWalletWordCount(12)}
+                        className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                          walletWordCount === 12
+                            ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                            : 'text-zinc-500 hover:text-zinc-300'
+                        }`}
+                      >
+                        12 Words
+                      </button>
+                      <button
+                        onClick={() => setWalletWordCount(24)}
+                        className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                          walletWordCount === 24
+                            ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                            : 'text-zinc-500 hover:text-zinc-300'
+                        }`}
+                      >
+                        24 Words
+                      </button>
+                    </div>
+                    {/* Strength indicator */}
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-zinc-800/60 border border-zinc-700/50">
+                        <Hash className="h-3 w-3 text-zinc-500" />
+                        <span className="text-[10px] text-zinc-400 font-mono">{walletWordCount === 12 ? '128' : '256'}-bit</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-16 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+                          <motion.div
+                            initial={{ width: 0 }}
+                            animate={{ width: walletWordCount === 12 ? '60%' : '100%' }}
+                            transition={{ duration: 0.5, ease: 'easeOut' }}
+                            className={`h-full rounded-full ${walletWordCount === 12 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                          />
+                        </div>
+                        <Badge variant="outline" className={`text-[9px] h-5 ${
+                          walletWordCount === 12
+                            ? 'border-amber-500/30 text-amber-400 bg-amber-500/10'
+                            : 'border-emerald-500/30 text-emerald-400 bg-emerald-500/10'
+                        }`}>
+                          {walletWordCount === 12 ? 'Strong' : 'Very Strong'}
+                        </Badge>
+                      </div>
+                    </div>
+                    <div className="ml-auto flex items-center gap-2">
+                      <Button
+                        onClick={handleGenerateWallet}
+                        disabled={isGenerating || autoScanActive}
+                        className="bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white text-xs h-9 gap-1.5"
+                      >
+                        {isGenerating ? (
+                          <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Generating...</>
+                        ) : (
+                          <><Sparkles className="h-3.5 w-3.5" /> Generate Wallet</>
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Auto-scan controls */}
+                  <div className="border border-zinc-800/60 rounded-xl p-4 space-y-3 bg-zinc-900/30">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Gauge className="h-4 w-4 text-amber-400" />
+                        <span className="text-sm font-medium text-zinc-300">Auto-Scan Mode</span>
+                        <TooltipProvider delayDuration={300}>
+                          <Tooltip>
+                            <TooltipTrigger>
+                              <Info className="h-3 w-3 text-zinc-600" />
+                            </TooltipTrigger>
+                            <TooltipContent side="top" className="text-xs max-w-xs">
+                              Continuously generates random wallets and checks their balances. Extremely unlikely to find funded wallets - this is primarily for educational/demonstration purposes.
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      </div>
+                      <Button
+                        onClick={handleAutoScan}
+                        variant={autoScanActive ? 'destructive' : 'outline'}
+                        size="sm"
+                        className={`text-xs h-8 gap-1.5 ${
+                          !autoScanActive ? 'border-amber-500/30 text-amber-400 hover:bg-amber-500/10' : ''
+                        }`}
+                      >
+                        {autoScanActive ? (
+                          <><StopCircle className="h-3.5 w-3.5" /> Stop Scan</>
+                        ) : (
+                          <><Zap className="h-3.5 w-3.5" /> Start Auto-Scan</>
+                        )}
+                      </Button>
+                    </div>
+
+                    {autoScanActive && (
+                      <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="space-y-2">
+                        <div className="flex items-center gap-3 text-xs flex-wrap">
+                          <Badge variant="outline" className="border-cyan-500/30 text-cyan-400 bg-cyan-500/10 text-[9px] animate-pulse">
+                            <Activity className="h-2.5 w-2.5 mr-1" />
+                            Scanning...
+                          </Badge>
+                          <span className="text-zinc-500">Wallets checked: <span className="text-zinc-300 font-mono">{autoScanCount}</span></span>
+                          <span className="text-zinc-500">Found: <span className="text-emerald-400 font-mono">{autoScanFound.length}</span></span>
+                          {autoScanElapsed > 0 && (
+                            <span className="text-zinc-500 flex items-center gap-1">
+                              <Clock className="h-3 w-3" />
+                              {formatTime(autoScanElapsed)}
+                            </span>
+                          )}
+                          {autoScanElapsed > 2 && autoScanCount > 0 && (
+                            <span className="text-zinc-500">
+                              Speed: <span className="text-cyan-400 font-mono">{(autoScanCount / autoScanElapsed).toFixed(1)}</span>
+                              <span className="text-zinc-600"> wallets/s</span>
+                            </span>
+                          )}
+                        </div>
+                        <Progress value={autoScanActive ? undefined : 0} className="h-1.5 bg-zinc-800" />
+                      </motion.div>
+                    )}
+
+                    {/* Found wallets */}
+                    {autoScanFound.length > 0 && (
+                      <div className="space-y-2 rounded-lg p-3 shadow-[0_0_15px_rgba(16,185,129,0.15)] border border-emerald-500/30 bg-emerald-500/5">
+                        <h4 className="text-xs font-medium text-emerald-400 flex items-center gap-1.5">
+                          <CheckCircle2 className="h-3 w-3" />
+                          Funded Wallets Found!
+                        </h4>
+                        <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                          {autoScanFound.map((found, i) => (
+                            <div key={i} className="flex items-center gap-2 bg-emerald-500/5 border border-emerald-500/20 rounded-lg px-3 py-2 text-xs">
+                              <Badge variant="outline" className="text-[9px] h-5 border-emerald-500/30 text-emerald-400">
+                                {found.blockchain.toUpperCase()}
+                              </Badge>
+                              <span className="text-emerald-300 font-mono truncate flex-1">{found.address}</span>
+                              <span className="text-emerald-400 font-mono">{found.balance} {BLOCKCHAIN_CONFIG[found.blockchain]?.symbol}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Generated Seed Phrase */}
+                  {generatedMnemonic && (
+                    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
+                      <div className="border border-emerald-500/20 rounded-xl p-4 bg-emerald-500/5">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-1.5">
+                            <Key className="h-3.5 w-3.5 text-emerald-400" />
+                            <span className="text-xs font-medium text-emerald-400">Generated Seed Phrase</span>
+                            <Badge variant="outline" className="text-[9px] h-4 border-zinc-700 text-zinc-500">
+                              {walletWordCount} words
+                            </Badge>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={handleCopyMnemonic}
+                            className="h-6 text-[10px] text-zinc-400 hover:text-emerald-400 gap-1"
+                          >
+                            <Copy className="h-3 w-3" />
+                            Copy
+                          </Button>
+                        </div>
+                        <div className="bg-zinc-900/80 rounded-lg p-3 font-mono text-xs text-emerald-300 leading-relaxed border border-zinc-800/60 select-all">
+                          {generatedMnemonic}
+                        </div>
+                        <p className="text-[10px] text-amber-500/80 mt-2 flex items-center gap-1">
+                          <AlertTriangle className="h-3 w-3" />
+                          Store this seed phrase securely. Never share it with anyone.
+                        </p>
+                      </div>
+
+                      {/* Recover this wallet button */}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleRecoverWallet(derivedAddresses.length > 0 ? derivedAddresses[0].blockchain : 'eth')}
+                        className="w-full h-9 text-xs border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 gap-1.5"
+                      >
+                        <ArrowRight className="h-3.5 w-3.5" />
+                        Recover this wallet
+                      </Button>
+
+                      {/* Derived Addresses */}
+                      {derivedAddresses.length > 0 && (
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <h4 className="text-xs font-medium text-zinc-300 flex items-center gap-1.5">
+                              <Fingerprint className="h-3.5 w-3.5 text-cyan-400" />
+                              Derived Addresses
+                            </h4>
+                            <div className="flex items-center gap-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={handleCopyAllAddresses}
+                                disabled={derivedAddresses.length === 0}
+                                className="h-7 text-[10px] border-zinc-700 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-300 gap-1"
+                              >
+                                <Copy className="h-3 w-3" />
+                                Copy All
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={handleCheckBalances}
+                                disabled={isCheckingBalances}
+                                className="h-7 text-[10px] border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10 gap-1"
+                              >
+                                {isCheckingBalances ? (
+                                  <><Loader2 className="h-3 w-3 animate-spin" /> Checking...</>
+                                ) : (
+                                  <><Search className="h-3 w-3" /> Check Balances</>
+                                )}
+                              </Button>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            {derivedAddresses.map((addr, idx) => {
+                              const balanceInfo = walletBalances[addr.address]
+                              const chainConfig = BLOCKCHAIN_CONFIG[addr.blockchain]
+                              const borderColor = addr.blockchain === 'btc' ? 'border-l-orange-500' : addr.blockchain === 'eth' ? 'border-l-emerald-500' : addr.blockchain === 'sol' ? 'border-l-cyan-500' : 'border-l-teal-500'
+                              const hoverBorderColor = addr.blockchain === 'btc' ? 'hover:border-orange-500/40' : addr.blockchain === 'eth' ? 'hover:border-emerald-500/40' : addr.blockchain === 'sol' ? 'hover:border-cyan-500/40' : 'hover:border-teal-500/40'
+                              const hasBalance = balanceInfo && parseFloat(balanceInfo.balance) > 0
+                              return (
+                                <Card key={idx} className={`bg-zinc-900/40 border-zinc-800/50 border-l-2 ${borderColor} ${hoverBorderColor} hover:scale-[1.01] transition-all duration-200 overflow-hidden`}>
+                                  <CardContent className="p-3 space-y-2">
+                                    <div className="flex items-center justify-between">
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="text-lg">{chainConfig?.icon}</span>
+                                        <div>
+                                          <p className="text-xs font-medium text-zinc-300">{chainConfig?.name}</p>
+                                          <p className="text-[9px] text-zinc-600">{addr.label}</p>
+                                        </div>
+                                      </div>
+                                      {balanceInfo && (
+                                        <Badge
+                                          variant="outline"
+                                          className={`text-[9px] h-5 ${
+                                            hasBalance
+                                              ? 'border-emerald-500/30 text-emerald-400 bg-emerald-500/10'
+                                              : 'border-zinc-700 text-zinc-500'
+                                          }`}
+                                        >
+                                          {hasBalance ? (
+                                            <><Zap className="h-2.5 w-2.5 mr-0.5" />{balanceInfo.balance} {balanceInfo.symbol}</>
+                                          ) : (
+                                            '0 ' + balanceInfo.symbol
+                                          )}
+                                        </Badge>
+                                      )}
+                                    </div>
+                                    {/* Address */}
+                                    <div className="space-y-1">
+                                      <div className="flex items-center justify-between">
+                                        <span className="text-[9px] text-zinc-600 uppercase tracking-wider font-medium">Address</span>
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          onClick={() => handleCopyAddress(addr.address)}
+                                          className="h-4 text-[9px] text-zinc-600 hover:text-emerald-400 px-1"
+                                        >
+                                          <Copy className="h-2.5 w-2.5" />
+                                        </Button>
+                                      </div>
+                                      <p className={`text-[10px] font-mono break-all leading-tight ${hasBalance ? 'text-emerald-400' : 'text-zinc-400'}`}>{addr.address}</p>
+                                    </div>
+                                    {/* Private Key */}
+                                    <div className="space-y-1">
+                                      <div className="flex items-center justify-between">
+                                        <span className="text-[9px] text-zinc-600 uppercase tracking-wider font-medium">Private Key</span>
+                                        <div className="flex items-center gap-1">
+                                          <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            onClick={() => handleTogglePrivateKey(idx)}
+                                            className="h-4 text-[9px] text-zinc-600 hover:text-amber-400 px-1"
+                                          >
+                                            {visiblePrivateKeys.has(idx) ? <EyeOff className="h-2.5 w-2.5" /> : <Eye className="h-2.5 w-2.5" />}
+                                          </Button>
+                                          {visiblePrivateKeys.has(idx) && (
+                                            <Button
+                                              variant="ghost"
+                                              size="sm"
+                                              onClick={() => handleCopyPrivateKey(addr.privateKey)}
+                                              className="h-4 text-[9px] text-zinc-600 hover:text-emerald-400 px-1"
+                                            >
+                                              <Copy className="h-2.5 w-2.5" />
+                                            </Button>
+                                          )}
+                                        </div>
+                                      </div>
+                                      {visiblePrivateKeys.has(idx) ? (
+                                        <p className="text-[10px] font-mono text-amber-400/80 break-all leading-tight select-all">{addr.privateKey}</p>
+                                      ) : (
+                                        <p className="text-[10px] font-mono text-zinc-600">••••••••••••••••••••••••</p>
+                                      )}
+                                    </div>
+                                    {/* Derivation path */}
+                                    <div className="flex items-center gap-1.5">
+                                      <Route className="h-2.5 w-2.5 text-zinc-600" />
+                                      <span className="text-[9px] font-mono text-zinc-600">{addr.derivationPath}</span>
+                                    </div>
+                                  </CardContent>
+                                </Card>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </motion.div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Wallet Stats Bar */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-zinc-900/30 border border-zinc-800/40">
+                  <div className="flex items-center justify-center h-7 w-7 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+                    <Wallet className="h-3.5 w-3.5 text-emerald-400" />
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-zinc-500">Wallets Generated</p>
+                    <p className="text-sm font-semibold text-zinc-200 font-mono">{walletsGenerated}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-zinc-900/30 border border-zinc-800/40">
+                  <div className="flex items-center justify-center h-7 w-7 rounded-lg bg-cyan-500/10 border border-cyan-500/20">
+                    <Globe className="h-3.5 w-3.5 text-cyan-400" />
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-zinc-500">Active Chains</p>
+                    <p className="text-sm font-semibold text-zinc-200">
+                      {derivedAddresses.length > 0
+                        ? [...new Set(derivedAddresses.map(a => a.blockchain))].map(b => BLOCKCHAIN_CONFIG[b as Blockchain]?.symbol).join(' / ')
+                        : '—'}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-zinc-900/30 border border-zinc-800/40">
+                  <div className="flex items-center justify-center h-7 w-7 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                    <Clock className="h-3.5 w-3.5 text-amber-400" />
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-zinc-500">Last Generated</p>
+                    <p className="text-sm font-semibold text-zinc-200">
+                      {lastGeneratedAt
+                        ? new Date(lastGeneratedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                        : '—'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          )}
         </AnimatePresence>
 
         {/* ── Keyboard Shortcuts Dialog ── */}
@@ -3325,6 +3948,8 @@ export default function Home() {
                 { keys: ['Ctrl', '1'], desc: 'Switch to Recovery tab' },
                 { keys: ['Ctrl', '2'], desc: 'Switch to Quick Verify tab' },
                 { keys: ['Ctrl', '3'], desc: 'Switch to History tab' },
+                { keys: ['Ctrl', '4'], desc: 'Switch to Word List tab' },
+                { keys: ['Ctrl', '5'], desc: 'Switch to Wallet tab' },
                 { keys: ['Ctrl', 'Enter'], desc: 'Start recovery (Recovery tab)' },
                 { keys: ['Ctrl', 'Shift', 'V'], desc: 'Open paste dialog (Recovery tab)' },
               ].map((shortcut) => (
