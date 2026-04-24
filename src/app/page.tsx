@@ -3562,7 +3562,7 @@ export default function Home() {
                       ))}
                       {/* Server-side job history */}
                       {jobHistory
-                        .sort((a, b) => b.startedAt - a.startedAt)
+                        .sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0))
                         .map((job) => (
                           <div
                             key={job.id}

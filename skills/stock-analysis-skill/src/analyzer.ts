@@ -241,17 +241,18 @@ export async function analyzeChartImage(
 ): Promise<string> {
   try {
     const zai = await ZAI.create();
-    const imageContent = isBase64
-      ? { type: "base64" as const, data: imageUrlOrBase64, mediaType: "image/png" as const }
-      : { type: "url" as const, url: imageUrlOrBase64 };
+    const imageUrl = isBase64
+      ? `data:image/png;base64,${imageUrlOrBase64}`
+      : imageUrlOrBase64;
 
-    const completion = await zai.chat.completions.create({
+    const completion = await zai.chat.completions.createVision({
+      model: "gpt-4o",
       messages: [
         { role: "system", content: "你是技术分析专家，擅长K线形态识别。请用中文回答。" },
         {
           role: "user",
           content: [
-            { type: "image", image: imageContent },
+            { type: "image_url", image_url: { url: imageUrl } },
             { type: "text", text: `这是 ${stockCode} 的K线图，请分析：\n1. 当前K线形态\n2. 趋势方向\n3. 关键支撑位和压力位\n4. 成交量配合\n5. 短期操作建议` },
           ],
         },
