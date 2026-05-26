@@ -107,6 +107,87 @@ function doubleSha256(payload: Buffer): Buffer {
   return second;
 }
 
+function base58CheckEncode(versionByte: number, payload: Buffer, alphabet: string = BTC_BASE58_ALPHABET): string {
+  const versionedPayload = Buffer.concat([Buffer.from([versionByte]), payload]);
+  const checksum = doubleSha256(versionedPayload).slice(0, 4);
+  return base58Encode(Buffer.concat([versionedPayload, checksum]), alphabet);
+}
+
+function getCompressedPublicKey(publicKey: string): Buffer {
+  const publicKeyBytes = Buffer.from(publicKey.replace(/^0x/, ''), 'hex');
+  if (publicKeyBytes.length === 33) return publicKeyBytes;
+
+  const x = publicKeyBytes.subarray(1, 33);
+  const y = publicKeyBytes.subarray(33, 65);
+  const prefix = y[y.length - 1] % 2 === 0 ? 0x02 : 0x03;
+  return Buffer.concat([Buffer.from([prefix]), x]);
+}
+
+const BECH32_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+
+function bech32Polymod(values: number[]): number {
+  const generators = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3];
+  let chk = 1;
+
+  for (const value of values) {
+    const top = chk >> 25;
+    chk = ((chk & 0x1ffffff) << 5) ^ value;
+    for (let i = 0; i < 5; i++) {
+      if (((top >> i) & 1) === 1) chk ^= generators[i];
+    }
+  }
+
+  return chk;
+}
+
+function bech32HrpExpand(hrp: string): number[] {
+  const values: number[] = [];
+  for (let i = 0; i < hrp.length; i++) values.push(hrp.charCodeAt(i) >> 5);
+  values.push(0);
+  for (let i = 0; i < hrp.length; i++) values.push(hrp.charCodeAt(i) & 31);
+  return values;
+}
+
+function bech32CreateChecksum(hrp: string, data: number[]): number[] {
+  const values = [...bech32HrpExpand(hrp), ...data, 0, 0, 0, 0, 0, 0];
+  const polymod = bech32Polymod(values) ^ 1;
+  const checksum: number[] = [];
+
+  for (let i = 0; i < 6; i++) {
+    checksum.push((polymod >> (5 * (5 - i))) & 31);
+  }
+
+  return checksum;
+}
+
+function convertBits(data: Buffer, fromBits: number, toBits: number, pad: boolean): number[] {
+  let acc = 0;
+  let bits = 0;
+  const result: number[] = [];
+  const maxv = (1 << toBits) - 1;
+
+  for (const value of data) {
+    acc = (acc << fromBits) | value;
+    bits += fromBits;
+    while (bits >= toBits) {
+      bits -= toBits;
+      result.push((acc >> bits) & maxv);
+    }
+  }
+
+  if (pad && bits > 0) {
+    result.push((acc << (toBits - bits)) & maxv);
+  }
+
+  return result;
+}
+
+function encodeBech32Address(hrp: string, witnessVersion: number, witnessProgram: Buffer): string {
+  const data = [witnessVersion, ...convertBits(witnessProgram, 8, 5, true)];
+  const combined = [...data, ...bech32CreateChecksum(hrp, data)];
+  return `${hrp}1${combined.map(value => BECH32_CHARSET[value]).join('')}`;
+}
+
 // ─── Wordlist ────────────────────────────────────────────────────────────────
 
 let cachedWordlist: string[] | null = null;
@@ -131,37 +212,19 @@ async function deriveBTCAddress(mnemonic: string, path: string): Promise<string>
   const hdNode = HDNodeWallet.fromSeed(seed);
   const child = hdNode.derivePath(path);
 
-  // Get uncompressed public key (remove 0x04 prefix byte)
-  const uncompressedHex = child.signingKey.publicKey;
-  const pubKeyBytes = Buffer.from(uncompressedHex.slice(4), 'hex');
+  const compressedPublicKey = getCompressedPublicKey(child.signingKey.publicKey);
+  const publicKeyHash = hash160(compressedPublicKey);
 
-  // Hash160: SHA256 then RIPEMD160
-  const h160 = hash160(pubKeyBytes);
-
-  // Determine version byte based on path
-  let versionByte: number;
   if (path.startsWith("m/84'")) {
-    // Native SegWit - use version 0x00 for now (simplified)
-    versionByte = 0x00;
-  } else if (path.startsWith("m/49'")) {
-    // P2SH-SegWit - version 0x05
-    versionByte = 0x05;
-  } else {
-    // Legacy P2PKH - version 0x00
-    versionByte = 0x00;
+    return encodeBech32Address('bc', 0, publicKeyHash);
   }
 
-  // Add version byte
-  const versionedPayload = Buffer.concat([Buffer.from([versionByte]), h160]);
+  if (path.startsWith("m/49'")) {
+    const redeemScript = Buffer.concat([Buffer.from([0x00, 0x14]), publicKeyHash]);
+    return base58CheckEncode(0x05, hash160(redeemScript));
+  }
 
-  // Calculate checksum: double SHA256, first 4 bytes
-  const checksum = doubleSha256(versionedPayload).slice(0, 4);
-
-  // Concatenate payload + checksum
-  const addressBytes = Buffer.concat([versionedPayload, checksum]);
-
-  // Base58Check encode
-  return base58Encode(addressBytes, BTC_BASE58_ALPHABET);
+  return base58CheckEncode(0x00, publicKeyHash);
 }
 
 async function deriveSOLAddress(mnemonic: string, path: string): Promise<string> {
