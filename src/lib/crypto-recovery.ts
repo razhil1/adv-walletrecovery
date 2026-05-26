@@ -716,6 +716,10 @@ function compareAddresses(derived: string, known: string, blockchain: Blockchain
       // ETH addresses are hex, compare case-insensitively
       return derived.toLowerCase() === known.toLowerCase();
     case 'btc':
+      if (derived.toLowerCase().startsWith('bc1') && known.toLowerCase().startsWith('bc1')) {
+        return derived.toLowerCase() === known.toLowerCase();
+      }
+      return derived === known;
     case 'sol':
     case 'xrp':
       // Base58 addresses - exact match
